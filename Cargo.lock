@@ -3833,6 +3833,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
 
 [[package]]
+name = "owt-control"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6398,6 +6407,7 @@ dependencies = [
  "frecency",
  "futures",
  "fuzzy-matcher",
+ "getrandom",
  "hdrhistogram",
  "http_req",
  "image",
@@ -6413,6 +6423,7 @@ dependencies = [
  "mux-lua",
  "once_cell",
  "ordered-float",
+ "owt-control",
  "parking_lot 0.12.1",
  "portable-pty",
  "promise",

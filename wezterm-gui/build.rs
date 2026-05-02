@@ -1,8 +1,9 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    #[cfg(windows)]
-    {
+    let target = std::env::var("TARGET").unwrap_or_default();
+
+    if target.contains("windows") {
         use anyhow::Context as _;
         use std::io::Write;
         use std::path::Path;
@@ -96,15 +97,31 @@ fn main() {
 
         let rcfile_name = Path::new(&std::env::var_os("OUT_DIR").unwrap()).join("resource.rc");
         let mut rcfile = std::fs::File::create(&rcfile_name).unwrap();
+        println!("cargo:rerun-if-changed=../assets/windows/owt.ico");
         println!("cargo:rerun-if-changed=../assets/windows/terminal.ico");
+        let icon_name = if windows_dir.join("owt.ico").exists() {
+            "owt.ico"
+        } else {
+            "terminal.ico"
+        };
+        let manifest_path = windows_dir
+            .join("manifest.manifest")
+            .display()
+            .to_string()
+            .replace('\\', "\\\\");
+        let icon_path = windows_dir
+            .join(icon_name)
+            .display()
+            .to_string()
+            .replace('\\', "\\\\");
         write!(
             rcfile,
             r#"
 #include <winres.h>
 // This ID is coupled with code in window/src/os/windows/window.rs
 #define IDI_ICON 0x101
-1 RT_MANIFEST "{win}\\manifest.manifest"
-IDI_ICON ICON "{win}\\terminal.ico"
+1 RT_MANIFEST "{manifest_path}"
+IDI_ICON ICON "{icon_path}"
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     1,0,0,0
 PRODUCTVERSION  1,0,0,0
@@ -118,13 +135,13 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "CompanyName",      "Wez Furlong\0"
-            VALUE "FileDescription",  "WezTerm - Wez's Terminal Emulator\0"
+            VALUE "CompanyName",      "Buanzo\0"
+            VALUE "FileDescription",  "OWT - LCARS Agentic Terminal\0"
             VALUE "FileVersion",      "{version}\0"
-            VALUE "LegalCopyright",   "Wez Furlong, MIT licensed\0"
-            VALUE "InternalName",     "\0"
-            VALUE "OriginalFilename", "\0"
-            VALUE "ProductName",      "WezTerm\0"
+            VALUE "LegalCopyright",   "Buanzo and WezTerm contributors, MIT licensed\0"
+            VALUE "InternalName",     "OWT\0"
+            VALUE "OriginalFilename", "OWT.exe\0"
+            VALUE "ProductName",      "OWT\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END
@@ -134,7 +151,8 @@ BEGIN
     END
 END
 "#,
-            win = windows_dir.display().to_string().replace("\\", "\\\\"),
+            manifest_path = manifest_path,
+            icon_path = icon_path,
             version = version,
         )
         .unwrap();
@@ -142,10 +160,11 @@ END
 
         // Obtain MSVC environment so that the rc compiler can find the right headers.
         // https://github.com/nabijaczleweli/rust-embed-resource/issues/11#issuecomment-603655972
-        let target = std::env::var("TARGET").unwrap();
-        if let Some(tool) = cc::windows_registry::find_tool(target.as_str(), "cl.exe") {
-            for (key, value) in tool.env() {
-                std::env::set_var(key, value);
+        if target.contains("msvc") {
+            if let Some(tool) = cc::windows_registry::find_tool(target.as_str(), "cl.exe") {
+                for (key, value) in tool.env() {
+                    std::env::set_var(key, value);
+                }
             }
         }
         embed_resource::compile(rcfile_name);

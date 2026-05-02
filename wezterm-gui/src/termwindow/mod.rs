@@ -155,6 +155,7 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    OwtLcarsAction(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

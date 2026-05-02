@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::OwtLcarsAction(_) => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::OwtLcarsAction(_) => {}
         }
     }
 
@@ -382,7 +384,24 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::OwtLcarsAction(action_id) => {
+                self.mouse_event_owt_lcars_action(action_id, event, context);
+            }
         }
+    }
+
+    fn mouse_event_owt_lcars_action(
+        &mut self,
+        action_id: String,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        if event.kind != WMEK::Press(MousePress::Left) {
+            return;
+        }
+
+        self.dispatch_owt_lcars_action(&action_id, context);
     }
 
     pub fn mouse_event_close_tab(

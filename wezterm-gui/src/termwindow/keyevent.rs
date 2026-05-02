@@ -642,6 +642,14 @@ impl super::TermWindow {
             return;
         }
 
+        if window_key.key_is_down
+            && !leader_active
+            && self.get_modal().is_none()
+            && self.dispatch_owt_lcars_keyboard_shortcut(&window_key, context)
+        {
+            return;
+        }
+
         // If we get here, then none of the keys matched
         // any key table rules. Therefore, we should pop all `until_unknown`
         // entries from the stack.

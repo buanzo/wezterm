@@ -271,6 +271,8 @@ impl crate::TermWindow {
 
         self.paint_window_borders(&mut layers)
             .context("paint_window_borders")?;
+        self.paint_owt_lcars_panel(&mut layers)
+            .context("paint_owt_lcars_panel")?;
         drop(layers);
         self.paint_modal().context("paint_modal")?;
 

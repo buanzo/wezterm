@@ -17,7 +17,7 @@ use portable_pty::cmdbuilder::CommandBuilder;
 use promise::spawn::block_on;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env::current_dir;
+use std::env::{current_dir, current_exe};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -41,6 +41,7 @@ mod glyphcache;
 mod inputmap;
 mod markdown;
 mod overlay;
+mod owt_native;
 mod quad;
 mod renderstate;
 mod resize_increment_calculator;
@@ -1156,13 +1157,31 @@ fn run() -> anyhow::Result<()> {
     {
         unsafe {
             ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                ::windows::core::PCWSTR(wide_string("org.wezfurlong.wezterm").as_ptr()),
+                ::windows::core::PCWSTR(wide_string("org.buanzo.owt").as_ptr()),
             )
             .unwrap();
         }
     }
 
-    let opts = Opt::parse();
+    let mut opts = Opt::parse();
+    if opts.config_file.is_none() && !opts.skip_config {
+        opts.config_file = owt_portable_config_file();
+    }
+
+    let _owt_native_endpoint = if owt_native::should_start_for(opts.cmd.as_ref()) {
+        match owt_native::start_endpoint() {
+            Ok(endpoint) => {
+                endpoint.export_env();
+                Some(endpoint)
+            }
+            Err(err) => {
+                log::warn!("Unable to start OWT native control endpoint: {err:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // This is a bit gross.
     // In order to not to automatically open a standard windows console when
@@ -1256,4 +1275,15 @@ fn run() -> anyhow::Result<()> {
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
         SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
     }
+}
+
+#[cfg(windows)]
+fn owt_portable_config_file() -> Option<OsString> {
+    let config_file = current_exe().ok()?.parent()?.join("wezterm.lua");
+    config_file.exists().then(|| config_file.into_os_string())
+}
+
+#[cfg(not(windows))]
+fn owt_portable_config_file() -> Option<OsString> {
+    None
 }

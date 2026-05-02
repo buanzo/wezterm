@@ -35,6 +35,7 @@ pub mod borders;
 pub mod corners;
 pub mod draw;
 pub mod fancy_tab_bar;
+pub mod owt_lcars;
 pub mod paint;
 pub mod pane;
 pub mod screen_line;
@@ -357,8 +358,10 @@ impl crate::TermWindow {
             .config
             .window_padding
             .left
-            .evaluate_as_pixels(h_context);
-        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
+            .evaluate_as_pixels(h_context)
+            + self.owt_lcars_reserved_left_pixels();
+        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context)
+            + self.owt_lcars_reserved_top_pixels();
 
         (padding_left, padding_top)
     }

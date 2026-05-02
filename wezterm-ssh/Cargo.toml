@@ -11,7 +11,9 @@ documentation = "https://docs.rs/wezterm-ssh"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["libssh-rs", "ssh2"]
+# OWT bootstrap: keep the ssh2 backend enabled by default, but avoid the
+# libssh-rs backend for the initial Windows GNU cross-build.
+default = ["ssh2"]
 vendored-openssl = ["ssh2/vendored-openssl", "libssh-rs/vendored-openssl"]
 vendored-openssl-ssh2 = ["ssh2/vendored-openssl"]
 vendored-openssl-libssh-rs = ["libssh-rs/vendored-openssl"]

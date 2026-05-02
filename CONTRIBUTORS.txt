@@ -1,0 +1,72 @@
+OWT terminal fork contributions
+
+This file tracks OWT-specific contributions layered on top of upstream WezTerm.
+It is not a replacement for upstream WezTerm's own authorship and contributor
+history.
+
+Arturo Busleiman / Buanzo
+- Product direction: OWT as a terminal-native LCARS and agentic control
+  surface, not only a themed launcher.
+- Operational requirement: native Windows OWT.exe that can be launched and
+  pinned directly from Windows.
+- OWT prototype context: current Lua/Rust/Python control-plane behavior in the
+  tools repository that this fork will migrate from.
+
+OpenAI Codex / Jadzia
+- Created the local WezTerm-derived source tree at the
+  `20240203-110809-5046fc22` baseline.
+- Established the `owt/windows-gnu-bootstrap` branch.
+- Diagnosed Linux package blockers and Windows GNU cross-build blockers.
+- Added the first bootstrap source adjustment to build with the `ssh2` SSH
+  backend while avoiding the `libssh-rs` cross-link failure.
+- Produced and installed the first native Windows OWT.exe release build under
+  `C:\Users\Usuario\AppData\Local\OWT\OWT.exe`.
+- Added the first portable Windows OWT config so the native binary launches an
+  Ubuntu WSL Bash login shell instead of `cmd.exe`.
+- Made native Windows `OWT.exe` auto-load the sibling portable config for
+  no-argument taskbar/Explorer launches and set a Windows-present font fallback
+  stack so launch does not depend on JetBrains Mono being installed.
+- Added OWT Windows app identity: LCARS-style `owt.ico`, embedded Windows
+  resources for Linux-hosted Windows cross-builds, OWT version metadata, and
+  AppUserModelID `org.buanzo.owt`.
+- Marked the native Windows config as `native-window-only` so agents do not
+  claim LCARS/control-plane projection before the native runtime transport is
+  implemented.
+- Added the first side-effect-free `owt-control` Rust scaffold for native
+  protocol, interface document, validation, runtime state, and lifecycle tool
+  naming.
+- Extended the native `OWT.exe` endpoint from status-only to status plus
+  semantic `validate_interface`/`apply_interface` calls, with applied interface
+  state owned by the terminal runtime.
+- Added the first native static LCARS control-band renderer in the GUI paint
+  path, plus `native_render_passes` status reporting to verify the native
+  renderer executed after an interface is applied.
+- Added first-pass native LCARS button hitboxes and side-effect-free
+  `dispatch_action` runtime state, including `last_dispatched_action` status
+  reporting for declared action ids.
+- Added native-mode MCP tool filtering in the tools-repo bridge and
+  `apply_lcars_panel` as the current high-level native path for simple
+  agent-created LCARS panels.
+- Expanded the native static LCARS renderer from a tiny diagnostic overlay into
+  a wider control-band surface with declared action buttons and render
+  telemetry.
+- Added docked native LCARS layout as the default so terminal text renders
+  below the control band, while keeping explicit overlay mode for HUD-style
+  interfaces.
+- Added first reserved native LCARS layout regions beyond the top band:
+  `right_rail` and `bottom_strip`, with terminal reflow around those surfaces.
+- Added first-pass semantic primitive rendering in the native LCARS surface and
+  `Ctrl+Alt+Shift+1..9` keyboard fallback for rendered action slots.
+- Hardened the docked native LCARS top-band renderer so semantic rows and
+  action buttons stop before the footer guard, preventing internal text
+  overlap at the current OWT font/cell size.
+- Added native local interface lifecycle endpoints and bridge tools:
+  `list_interfaces`, `save_interface`, and `load_interface`, storing semantic
+  interface documents in the local OWT profile store rather than arbitrary
+  caller-supplied paths.
+- Refactored the current native LCARS renderer around shared marker/button
+  primitives for top/right/bottom surfaces, preventing marker-over-text
+  rendering and adding visible active `ACK` feedback for dispatched actions.
+- Refreshed installed Windows shortcut metadata so pinned/start shortcuts point
+  at native `OWT.exe` with the OWT icon.
+- Documented the build recipe, artifact policy, and next branding/runtime steps.

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="32" fill="#000000"/>
+  <path d="M34 48h92c28 0 50 22 50 50v14h46v32h-78v-46c0-10-8-18-18-18H34z" fill="#ff8f1f"/>
+  <rect x="34" y="102" width="80" height="32" rx="16" fill="#9d8bd3"/>
+  <rect x="34" y="152" width="188" height="32" rx="16" fill="#d65b6a"/>
+  <rect x="34" y="202" width="132" height="22" rx="11" fill="#f5a623"/>
+  <text x="51" y="92" fill="#000000" font-family="DejaVu Sans,Arial,sans-serif" font-size="34" font-weight="700">OWT</text>
+  <text x="52" y="176" fill="#000000" font-family="DejaVu Sans,Arial,sans-serif" font-size="18" font-weight="700">LCARS</text>
+</svg>

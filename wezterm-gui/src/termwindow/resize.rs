@@ -171,11 +171,15 @@ impl super::TermWindow {
                 pixel_max: size.pixel_height as f32,
                 pixel_cell: self.render_metrics.cell_size.height as f32,
             };
-            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-            let padding_bottom =
-                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
-            let padding_right = effective_right_padding(&config, h_context);
+            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize
+                + self.owt_lcars_reserved_left_pixels().ceil() as usize;
+            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize
+                + self.owt_lcars_reserved_top_pixels().ceil() as usize;
+            let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context)
+                as usize
+                + self.owt_lcars_reserved_bottom_pixels().ceil() as usize;
+            let padding_right = effective_right_padding(&config, h_context)
+                + self.owt_lcars_reserved_right_pixels().ceil() as usize;
 
             let pixel_height = (rows * self.render_metrics.cell_size.height as usize)
                 + (padding_top + padding_bottom)
@@ -217,11 +221,15 @@ impl super::TermWindow {
                 pixel_max: self.terminal_size.pixel_height as f32,
                 pixel_cell: self.render_metrics.cell_size.height as f32,
             };
-            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-            let padding_bottom =
-                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
-            let padding_right = effective_right_padding(&config, h_context);
+            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize
+                + self.owt_lcars_reserved_left_pixels().ceil() as usize;
+            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize
+                + self.owt_lcars_reserved_top_pixels().ceil() as usize;
+            let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context)
+                as usize
+                + self.owt_lcars_reserved_bottom_pixels().ceil() as usize;
+            let padding_right = effective_right_padding(&config, h_context)
+                + self.owt_lcars_reserved_right_pixels().ceil() as usize;
 
             let avail_width = dimensions.pixel_width.saturating_sub(
                 (padding_left + padding_right) as usize
@@ -475,14 +483,19 @@ impl super::TermWindow {
             pixel_max: self.dimensions.pixel_height as f32,
             pixel_cell: render_metrics.cell_size.height as f32,
         };
-        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
-        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
+        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize
+            + self.owt_lcars_reserved_left_pixels().ceil() as usize;
+        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize
+            + self.owt_lcars_reserved_top_pixels().ceil() as usize;
         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+        let padding_bottom =
+            padding_bottom + self.owt_lcars_reserved_bottom_pixels().ceil() as usize;
 
         let dimensions = Dimensions {
             pixel_width: ((terminal_size.cols as usize * render_metrics.cell_size.width as usize)
                 + padding_left
-                + effective_right_padding(&config, h_context)),
+                + effective_right_padding(&config, h_context)
+                + self.owt_lcars_reserved_right_pixels().ceil() as usize),
             pixel_height: ((terminal_size.rows as usize * render_metrics.cell_size.height as usize)
                 + padding_top
                 + padding_bottom) as usize
@@ -515,7 +528,7 @@ impl super::TermWindow {
                 dpi: self.dimensions.dpi as f32,
                 pixel_max: self.dimensions.pixel_width as f32,
             },
-        )
+        ) + self.owt_lcars_reserved_right_pixels().ceil() as usize
     }
 }
 
