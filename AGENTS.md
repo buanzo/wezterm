@@ -42,7 +42,8 @@ no explicit side/bottom layout overrides them, uses a first layout planner to
 choose inline or stacked table/data detail bays and show explicit signal/action
 overflow counters when geometry is tight, wraps long structural signal rows
 within their reserved row budget instead of letting them run into adjacent
-LCARS regions, suppresses the structural command bay when no actions are
+LCARS regions, gives structural chrome-marker labels black backing so rails do
+not cut through text, suppresses the structural command bay when no actions are
 declared, and reclaims that horizontal space for actionless status/table/detail
 interfaces, uses compact/regular/wide structural breakpoints so command banks
 do not steal narrow-window content space and wide windows give more width to
@@ -69,6 +70,18 @@ upstream churn.
 Current Windows GNU release build from WSL:
 
 ```sh
+packaging/windows/build_and_install_owt.sh
+```
+
+That script builds `wezterm-gui.exe`, regenerates the stripped
+`target/x86_64-pc-windows-gnu/release/OWT.exe` from it, installs the sibling
+portable config, installs only when no OWT process is running, and verifies the
+installed hash. If OWT is running, it stages `%LOCALAPPDATA%\OWT\OWT.next.exe`
+and asks for a rerun after the window is closed.
+
+Manual equivalent:
+
+```sh
 RUSTFLAGS='-L native=/tmp/owt-openssl-gnu-lib' \
 TARGET_CXXFLAGS='-Wa,-mbig-obj' \
 cargo +1.75.0 build \
@@ -76,6 +89,9 @@ cargo +1.75.0 build \
   --target x86_64-pc-windows-gnu \
   --release \
   --features wezterm-ssh/vendored-openssl-ssh2
+x86_64-w64-mingw32-strip --strip-unneeded \
+  -o target/x86_64-pc-windows-gnu/release/OWT.exe \
+  target/x86_64-pc-windows-gnu/release/wezterm-gui.exe
 ```
 
 See `OWT_BASELINE.md` for the OpenSSL alias workaround, HarfBuzz object-size

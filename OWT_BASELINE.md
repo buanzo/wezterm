@@ -67,6 +67,13 @@ The first successful artifacts were:
 - Stripped release copy: `target/x86_64-pc-windows-gnu/release/OWT.exe`
   (`73M`, PE32+ GUI).
 
+Use `packaging/windows/build_and_install_owt.sh` for current Windows GNU
+install iterations. It builds `wezterm-gui.exe`, regenerates the stripped
+`OWT.exe` from that fresh GUI binary, installs the portable sibling config, and
+prints target/installed hashes. This matters because `cargo build` updates
+`wezterm-gui.exe`; `target/.../release/OWT.exe` is only current after the strip
+step.
+
 Windows install performed on 2026-05-01:
 
 - Installed native binary:
@@ -184,9 +191,10 @@ x86_64-w64-mingw32-objdump -x \
   rg -n 'Resource Directory|\\.rsrc|Entry 2' -C 2
 ```
 
-When `%LOCALAPPDATA%\OWT\OWT.exe` is locked by a running OWT process, stage the
-stripped build as `%LOCALAPPDATA%\OWT\OWT.next.exe`, copy
-`%LOCALAPPDATA%\OWT\OWT.ico`, close all OWT windows, then replace `OWT.exe`.
+When `%LOCALAPPDATA%\OWT\OWT.exe` is locked by a running OWT process, let
+`packaging/windows/build_and_install_owt.sh` stage the stripped build as
+`%LOCALAPPDATA%\OWT\OWT.next.exe`, close all OWT windows, then rerun the script
+with `--no-build` to replace `OWT.exe`.
 
 ## Linux Baseline
 

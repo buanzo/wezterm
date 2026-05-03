@@ -663,6 +663,15 @@ impl crate::TermWindow {
         let header_y = top + 10.0;
         let header_h = 38.0;
         let rail_bottom = window_bottom.max(bottom);
+        paint_lcars_side_rail_chrome(
+            self,
+            layers,
+            rail_left,
+            top + 10.0,
+            rail_width,
+            (rail_bottom - top - 18.0).max(panel_height),
+            lcars,
+        )?;
         paint_lcars_primary_elbow(
             self,
             layers,
@@ -672,15 +681,6 @@ impl crate::TermWindow {
             (panel_height * 0.58).clamp(148.0, 220.0),
             rail_width,
             header_h,
-            lcars,
-        )?;
-        paint_lcars_side_rail_chrome(
-            self,
-            layers,
-            rail_left,
-            top + 10.0,
-            rail_width,
-            (rail_bottom - top - 18.0).max(panel_height),
             lcars,
         )?;
         paint_lcars_bar_run(
@@ -744,6 +744,8 @@ impl crate::TermWindow {
         let table_detail_ready =
             table_data.is_some() && layout_plan.detail != LcarsDetailPlacement::None;
         let signal_cols = (layout_plan.signal_width / cell_width).max(8.0) as usize;
+        let signal_visual_limit =
+            structural_signal_visual_limit(&layout_plan, signal_limit, cell_height);
         let action_cols = if layout_plan.command_visible {
             ((layout_plan.command_width - 26.0) / cell_width).max(8.0) as usize
         } else {
@@ -800,14 +802,19 @@ impl crate::TermWindow {
         let mut used_signal_rows = 0usize;
         for (index, line) in signal_lines.iter().enumerate() {
             let remaining_rows = layout_plan.signal_rows.saturating_sub(used_signal_rows);
-            if remaining_rows == 0 || signal_y + cell_height > signal_limit {
+            if remaining_rows == 0 || signal_y + cell_height > signal_visual_limit {
                 break;
             }
-            let text_cols = signal_cols.saturating_sub(2).max(1);
+            let text_cols = structural_signal_text_cols(
+                line.kind,
+                layout_plan.signal_width,
+                cell_width,
+                signal_cols,
+            );
             let max_text_lines = remaining_rows.min(LCARS_SIGNAL_TEXT_MAX_LINES);
             let wrapped_text = wrap_text_lines(&line.text, text_cols, max_text_lines);
             let text_rows = wrapped_text.len().max(1);
-            if signal_y + (cell_height * text_rows as f32) > signal_limit {
+            if signal_y + (cell_height * text_rows as f32) > signal_visual_limit {
                 break;
             }
             paint_lcars_signal_marker(
@@ -833,6 +840,20 @@ impl crate::TermWindow {
                     lcars.amber,
                 )?;
             }
+            if structural_signal_text_needs_backing(line.kind) {
+                self.filled_rectangle(
+                    layers,
+                    1,
+                    rect(
+                        content_left + 14.0,
+                        signal_y - 1.0,
+                        ((text_cols as f32 * cell_width) + 12.0)
+                            .min((layout_plan.signal_width - 20.0).max(cell_width * 8.0)),
+                        (cell_height * text_rows as f32) + 3.0,
+                    ),
+                    lcars.black,
+                )?;
+            }
             for (text_index, text) in wrapped_text.iter().enumerate() {
                 self.paint_owt_panel_text(
                     layers,
@@ -849,13 +870,40 @@ impl crate::TermWindow {
             shown_signals += 1;
         }
         let hidden_signals = signal_lines.len().saturating_sub(shown_signals);
-        if hidden_signals > 0 && signal_y + cell_height <= signal_limit {
+        if hidden_signals > 0 && signal_y + cell_height <= signal_visual_limit {
+            let overflow_label = format!("+{hidden_signals} SIGNALS");
+            let overflow_cols = signal_cols.saturating_sub(2);
+            let overflow_y = (signal_y + (cell_height * 0.25))
+                .min(signal_visual_limit - cell_height)
+                .max(signal_y);
+            self.filled_rectangle(
+                layers,
+                1,
+                rect(
+                    content_left,
+                    overflow_y - 5.0,
+                    layout_plan.signal_width,
+                    cell_height + 10.0,
+                ),
+                lcars.black,
+            )?;
+            self.filled_rectangle(
+                layers,
+                1,
+                rect(
+                    content_left + 12.0,
+                    overflow_y + 3.0,
+                    10.0,
+                    cell_height * 0.72,
+                ),
+                lcars.peach,
+            )?;
             self.paint_owt_panel_text(
                 layers,
-                content_left + 18.0,
-                signal_y,
-                signal_cols.saturating_sub(2),
-                &format!("+{hidden_signals} SIGNALS"),
+                content_left + 28.0,
+                overflow_y,
+                overflow_cols,
+                &overflow_label,
                 RgbColor::new_8bpc(255, 153, 102),
                 true,
             )?;
@@ -1678,6 +1726,58 @@ fn lcars_structural_breakpoint(content_width: f32, cell_width: f32) -> LcarsStru
     } else {
         LcarsStructuralBreakpoint::Wide
     }
+}
+
+fn structural_signal_visual_limit(
+    plan: &LcarsStructuralPlan,
+    signal_limit: f32,
+    cell_height: f32,
+) -> f32 {
+    if matches!(plan.detail, LcarsDetailPlacement::Stacked) {
+        (plan.detail_top - LCARS_PANEL_GAP.max(cell_height * 0.35)).min(signal_limit)
+    } else {
+        signal_limit
+    }
+}
+
+fn structural_signal_text_cols(
+    kind: PanelLineKind,
+    signal_width: f32,
+    cell_width: f32,
+    signal_cols: usize,
+) -> usize {
+    let chrome_width = match kind {
+        PanelLineKind::Bar
+        | PanelLineKind::BarRun
+        | PanelLineKind::Frame
+        | PanelLineKind::ContentBay
+        | PanelLineKind::CommandGrid
+        | PanelLineKind::DataCascade
+        | PanelLineKind::Section => lcars_signal_marker_width(kind, signal_width - 16.0) + 24.0,
+        PanelLineKind::Progress => 132.0,
+        _ => 0.0,
+    };
+    let chrome_cols = (chrome_width / cell_width.max(1.0)).ceil().max(0.0) as usize;
+    let max_cols = signal_cols.saturating_sub(2).max(1);
+    signal_cols
+        .saturating_sub(chrome_cols)
+        .saturating_sub(2)
+        .max(8)
+        .min(max_cols)
+}
+
+fn structural_signal_text_needs_backing(kind: PanelLineKind) -> bool {
+    matches!(
+        kind,
+        PanelLineKind::Bar
+            | PanelLineKind::BarRun
+            | PanelLineKind::Frame
+            | PanelLineKind::ContentBay
+            | PanelLineKind::CommandGrid
+            | PanelLineKind::DataCascade
+            | PanelLineKind::Section
+            | PanelLineKind::Progress
+    )
 }
 
 fn plan_lcars_structural_console(
@@ -3501,8 +3601,9 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
 #[cfg(test)]
 mod tests {
     use super::{
-        lcars_structural_breakpoint, plan_lcars_structural_console, wrap_text_lines,
-        LcarsDetailPlacement, LcarsStructuralBreakpoint,
+        lcars_structural_breakpoint, plan_lcars_structural_console, structural_signal_text_cols,
+        structural_signal_text_needs_backing, structural_signal_visual_limit, wrap_text_lines,
+        LcarsDetailPlacement, LcarsStructuralBreakpoint, PanelLineKind,
     };
 
     #[test]
@@ -3566,5 +3667,41 @@ mod tests {
         assert!(wide.two_action_columns);
         assert!(wide.command_width > compact.command_width);
         assert!(wide.detail_width > compact.detail_width);
+    }
+
+    #[test]
+    fn stacked_detail_reserves_signal_overflow_guard() {
+        let stacked =
+            plan_lcars_structural_console(120.0, 760.0, 90.0, 320.0, 10.0, 20.0, false, true, 4);
+
+        assert_eq!(stacked.detail, LcarsDetailPlacement::Stacked);
+        let visual_limit = structural_signal_visual_limit(&stacked, 320.0, 20.0);
+        assert!(visual_limit < stacked.detail_top);
+        assert!(visual_limit <= stacked.detail_top - 7.0);
+    }
+
+    #[test]
+    fn structural_signal_text_reserves_marker_chrome() {
+        let signal_cols = 52;
+
+        let content_cols =
+            structural_signal_text_cols(PanelLineKind::ContentBay, 520.0, 10.0, signal_cols);
+        let metric_cols =
+            structural_signal_text_cols(PanelLineKind::Metric, 520.0, 10.0, signal_cols);
+
+        assert!(content_cols < metric_cols);
+        assert!(content_cols >= 8);
+        assert_eq!(metric_cols, signal_cols - 2);
+    }
+
+    #[test]
+    fn structural_signal_backing_tracks_chrome_marker_kinds() {
+        assert!(structural_signal_text_needs_backing(
+            PanelLineKind::ContentBay
+        ));
+        assert!(structural_signal_text_needs_backing(
+            PanelLineKind::Progress
+        ));
+        assert!(!structural_signal_text_needs_backing(PanelLineKind::Metric));
     }
 }
