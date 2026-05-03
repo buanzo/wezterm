@@ -1582,6 +1582,7 @@ struct LcarsTableData {
     title: String,
     columns: Vec<String>,
     rows: Vec<LcarsTableRow>,
+    overflow_columns: usize,
     overflow_rows: usize,
 }
 
@@ -1826,6 +1827,9 @@ fn has_structural_lcars_layout(document: &InterfaceDocument) -> bool {
     for node in &document.nodes {
         if let Some(profile) = node_property_value(node, "profile")
             .or_else(|| node_property_value(node, "layout_profile"))
+            .or_else(|| node_property_value(node, "information_shape"))
+            .or_else(|| node_property_value(node, "data_shape"))
+            .or_else(|| node_property_value(node, "shape"))
         {
             let normalized = profile.trim().to_ascii_lowercase().replace(['-', ' '], "_");
             if matches!(
@@ -1836,6 +1840,15 @@ fn has_structural_lcars_layout(document: &InterfaceDocument) -> bool {
                     | "frame"
                     | "framed"
                     | "content_bay"
+                    | "table"
+                    | "table_bay"
+                    | "matrix"
+                    | "operational_matrix"
+                    | "fleet_matrix"
+                    | "incident_summary"
+                    | "queue_triage"
+                    | "project_status"
+                    | "artifact_browser"
                     | "lcars_v24"
             ) {
                 return true;
@@ -1852,6 +1865,7 @@ fn has_structural_lcars_layout(document: &InterfaceDocument) -> bool {
                 | UiNodeKind::BarRun
                 | UiNodeKind::CommandGrid
                 | UiNodeKind::DataCascade
+                | UiNodeKind::Table
         )
     })
 }
@@ -2082,7 +2096,7 @@ fn lcars_table_data(
     max_rows: usize,
 ) -> Option<LcarsTableData> {
     let node = first_node_matching(document, |node| node.kind == UiNodeKind::Table)?;
-    let columns = parse_table_columns(node, max_columns);
+    let (columns, overflow_columns) = parse_table_columns(node, max_columns);
     let mut rows = parse_table_rows(node, columns.len().max(1));
     let overflow_rows = rows.len().saturating_sub(max_rows);
     rows.truncate(max_rows);
@@ -2098,26 +2112,33 @@ fn lcars_table_data(
             .unwrap_or_else(|| "TABLE BAY".to_string()),
         columns,
         rows,
+        overflow_columns,
         overflow_rows,
     })
 }
 
-fn parse_table_columns(node: &UiNode, max_columns: usize) -> Vec<String> {
+fn parse_table_columns(node: &UiNode, max_columns: usize) -> (Vec<String>, usize) {
     let source = node
         .properties
         .get("columns")
         .or_else(|| node.properties.get("headers"));
-    let mut columns = source
+    let source_columns = source
         .map(|value| split_table_cells(value))
         .unwrap_or_default()
         .into_iter()
         .filter(|cell| !cell.trim().is_empty())
-        .take(max_columns.max(1))
+        .collect::<Vec<_>>();
+    let max_columns = max_columns.max(1);
+    let overflow_columns = source_columns.len().saturating_sub(max_columns);
+    let mut columns = source_columns
+        .into_iter()
+        .take(max_columns)
         .collect::<Vec<_>>();
     if columns.is_empty() {
         columns = vec!["ITEM".to_string(), "VALUE".to_string(), "STATE".to_string()];
+        return (columns, 0);
     }
-    columns
+    (columns, overflow_columns)
 }
 
 fn parse_table_rows(node: &UiNode, expected_columns: usize) -> Vec<LcarsTableRow> {
@@ -2749,13 +2770,19 @@ fn paint_lcars_table_bay(
     }
 
     let hidden_rows = table.overflow_rows + table.rows.len().saturating_sub(visible_rows);
-    if hidden_rows > 0 {
+    let overflow_text = match (hidden_rows, table.overflow_columns) {
+        (0, 0) => None,
+        (rows, 0) => Some(format!("+{rows} ROWS")),
+        (0, cols) => Some(format!("+{cols} COLS")),
+        (rows, cols) => Some(format!("+{rows}R +{cols}C")),
+    };
+    if let Some(overflow_text) = overflow_text {
         window.paint_owt_panel_text(
             layers,
-            x + width - 96.0,
+            x + width - 108.0,
             y + height - cell_height - 4.0,
-            12,
-            &format!("+{hidden_rows} ROWS"),
+            14,
+            &overflow_text,
             RgbColor::new_8bpc(255, 153, 102),
             true,
         )?;
@@ -2772,20 +2799,38 @@ fn table_cell_geometry(
     cell_width: f32,
 ) -> (f32, usize) {
     let columns = columns.max(1);
-    let weights = if columns >= 4 {
-        vec![1.35, 0.85, 1.0, 0.9]
-    } else if columns == 3 {
-        vec![1.25, 1.0, 0.9]
-    } else {
-        vec![1.0; columns]
-    };
-    let total_weight: f32 = weights.iter().take(columns).sum();
+    let weights = table_column_weights(columns);
+    let total_weight: f32 = weights.iter().sum::<f32>().max(1.0);
     let prior_weight: f32 = weights.iter().take(index.min(columns)).sum();
-    let cell_weight = weights.get(index).copied().unwrap_or(1.0);
+    let cell_weight = weights
+        .get(index.min(columns.saturating_sub(1)))
+        .copied()
+        .unwrap_or(1.0);
     let cell_x = x + (width * prior_weight / total_weight);
     let cell_width_px = width * cell_weight / total_weight;
     let cell_cols = (cell_width_px / cell_width).floor().max(1.0) as usize;
     (cell_x, cell_cols)
+}
+
+fn table_column_weights(columns: usize) -> Vec<f32> {
+    match columns {
+        0 | 1 => vec![1.0],
+        2 => vec![1.2, 1.0],
+        3 => vec![1.25, 1.0, 0.9],
+        _ => {
+            let mut weights = Vec::with_capacity(columns);
+            weights.push(1.35);
+            weights.push(0.85);
+            for index in 2..columns {
+                if index + 1 == columns {
+                    weights.push(0.9);
+                } else {
+                    weights.push(1.0);
+                }
+            }
+            weights
+        }
+    }
 }
 
 fn table_severity_fill(severity: Option<&str>, index: usize, palette: LcarsPalette) -> LinearRgba {

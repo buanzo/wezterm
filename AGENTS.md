@@ -35,9 +35,12 @@ are wired to the native dispatch path. The current renderer shares LCARS
 marker/button primitives across top/right/bottom surfaces, keeps marker chrome
 out from under text, recognizes first-class `frame`, `side_rail`, `bar_run`,
 `content_bay`, `data_cascade`, `table`, and `command_grid` primitives, can draw
-a structural-console table bay with headers, severity lanes, and row overflow,
-uses a first layout planner to choose inline or stacked table/data detail bays
-and show explicit signal/action overflow counters when geometry is tight,
+a structural-console table bay with headers, severity lanes, row/column
+overflow, and stable weighted geometry beyond four columns, promotes table or
+information-shape profiles such as `fleet_matrix` into the structural path when
+no explicit side/bottom layout overrides them, uses a first layout planner to
+choose inline or stacked table/data detail bays and show explicit signal/action
+overflow counters when geometry is tight,
 uses harder console bars/command paddles instead of generic rounded desktop
 pills, and shows active `ACK` feedback for the most recently dispatched action.
 The native endpoint also has the first granular
@@ -155,8 +158,9 @@ structural LCARS surface for the active interface, registers button-node
 hitboxes, and the status response reports `native_render_passes` so agents can
 verify the native paint path ran. The renderer now has shared marker/button
 primitives, structural frame/content-bay primitives, first structural-console
-layout planning, and active dispatch feedback, but it is still an early native
-scene slice.
+layout planning, table/information-shape structural promotion, row/column
+overflow reporting, and active dispatch feedback, but it is still an early
+native scene slice.
 Keep the listener on loopback; the tools-repo bridge can use Windows interop
 when WSL cannot reach Windows loopback directly. Do not expand this endpoint
 into pane mutation, external action execution, arbitrary import/export

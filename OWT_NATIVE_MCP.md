@@ -119,10 +119,15 @@ semantic `frame`, `side_rail`, `bar_run`, `content_bay`, `data_cascade`,
 now get a dedicated LCARS table bay when space allows: columns come from
 `properties.columns`/`properties.headers`, rows come from newline/semicolon
 text or `properties.rows`, and row severity can be inferred from visible cell
-text or supplied through child row properties. The structural renderer also has
-the first layout-planner slice: it sizes the command grid, chooses inline vs
-stacked table/data-cascade detail bays from available geometry, and shows
-explicit hidden signal/action counters instead of silently overpainting.
+text or supplied through child row properties. Table-only documents and
+information-shape profiles such as `fleet_matrix`, `queue_triage`,
+`incident_summary`, `project_status`, and `artifact_browser` now promote to the
+structural renderer when no explicit side/bottom layout overrides them. Table
+geometry supports more than four columns without spilling past the bay and
+reports hidden row/column overflow. The structural renderer also has the first
+layout-planner slice: it sizes the command grid, chooses inline vs stacked
+table/data-cascade detail bays from available geometry, and shows explicit
+hidden signal/action counters instead of silently overpainting.
 
 ## Runtime Ownership
 
@@ -291,7 +296,8 @@ Until external action execution, pane control, and full package lifecycle
 support exist, do not claim that native `OWT.exe` provides the full prototype
 LCARS/control surface. The native endpoint now proves process reachability,
 applied interface state, compact and first structural OWT-owned LCARS render passes, native
-table-bay rendering for semantic operational matrices,
+table-bay rendering for semantic operational matrices, table/information-shape
+promotion into the structural path, row/column overflow reporting,
 high-level panel application through the bridge, local save/list/load for
 interface documents in the OWT profile store, `update_node` for atomic
 node-level construction, and side-effect-free action dispatch state for
