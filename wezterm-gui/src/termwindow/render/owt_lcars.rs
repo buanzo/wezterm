@@ -30,6 +30,7 @@ const LCARS_BOTTOM_PANEL_ROW_HEIGHT: f32 = 7.0;
 const LCARS_MIN_TERMINAL_REMAINDER: f32 = 420.0;
 const LCARS_MAX_PANEL_LINES: usize = 18;
 const LCARS_KEY_ACTION_LIMIT: usize = 9;
+const LCARS_SIGNAL_TEXT_MAX_LINES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LcarsPanelLayout {
@@ -786,12 +787,17 @@ impl crate::TermWindow {
             .filter(|line| !table_detail_ready || line.kind != PanelLineKind::Table)
             .collect::<Vec<_>>();
         let mut shown_signals = 0usize;
-        for (index, line) in signal_lines
-            .iter()
-            .take(layout_plan.signal_rows)
-            .enumerate()
-        {
-            if signal_y + cell_height > signal_limit {
+        let mut used_signal_rows = 0usize;
+        for (index, line) in signal_lines.iter().enumerate() {
+            let remaining_rows = layout_plan.signal_rows.saturating_sub(used_signal_rows);
+            if remaining_rows == 0 || signal_y + cell_height > signal_limit {
+                break;
+            }
+            let text_cols = signal_cols.saturating_sub(2).max(1);
+            let max_text_lines = remaining_rows.min(LCARS_SIGNAL_TEXT_MAX_LINES);
+            let wrapped_text = wrap_text_lines(&line.text, text_cols, max_text_lines);
+            let text_rows = wrapped_text.len().max(1);
+            if signal_y + (cell_height * text_rows as f32) > signal_limit {
                 break;
             }
             paint_lcars_signal_marker(
@@ -817,16 +823,19 @@ impl crate::TermWindow {
                     lcars.amber,
                 )?;
             }
-            self.paint_owt_panel_text(
-                layers,
-                content_left + 18.0,
-                signal_y,
-                signal_cols.saturating_sub(2),
-                &line.text,
-                lcars_signal_text_color(line.kind, index),
-                false,
-            )?;
-            signal_y += cell_height * 1.18;
+            for (text_index, text) in wrapped_text.iter().enumerate() {
+                self.paint_owt_panel_text(
+                    layers,
+                    content_left + 18.0,
+                    signal_y + (text_index as f32 * cell_height),
+                    text_cols,
+                    text,
+                    lcars_signal_text_color(line.kind, index),
+                    false,
+                )?;
+            }
+            signal_y += cell_height * (text_rows as f32 + 0.18);
+            used_signal_rows += text_rows;
             shown_signals += 1;
         }
         let hidden_signals = signal_lines.len().saturating_sub(shown_signals);
@@ -3281,6 +3290,95 @@ fn fit_text_ellipsis(text: &str, max_cols: usize) -> String {
     format!("{head}...")
 }
 
+fn wrap_text_lines(text: &str, max_cols: usize, max_lines: usize) -> Vec<String> {
+    let max_cols = max_cols.max(1);
+    let max_lines = max_lines.max(1);
+    let normalized = text.replace(['\r', '\n'], " ");
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut overflow = false;
+
+    for word in normalized.split_whitespace() {
+        let word_len = word.chars().count();
+        let current_len = current.chars().count();
+        let separator = usize::from(!current.is_empty());
+        if current_len + separator + word_len <= max_cols {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            continue;
+        }
+
+        if !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+            if lines.len() >= max_lines {
+                overflow = true;
+                break;
+            }
+        }
+
+        if word_len <= max_cols {
+            current.push_str(word);
+        } else {
+            let mut remaining = word;
+            while !remaining.is_empty() {
+                if lines.len() + usize::from(!current.is_empty()) >= max_lines {
+                    overflow = true;
+                    break;
+                }
+                let chunk = remaining.chars().take(max_cols).collect::<String>();
+                let consumed = chunk.len();
+                if current.is_empty() {
+                    current = chunk;
+                } else {
+                    lines.push(current);
+                    current = chunk;
+                }
+                remaining = &remaining[consumed..];
+                if current.chars().count() >= max_cols {
+                    lines.push(current);
+                    current = String::new();
+                }
+            }
+            if overflow {
+                break;
+            }
+        }
+    }
+
+    if !current.is_empty() && lines.len() < max_lines {
+        lines.push(current);
+    } else if !current.is_empty() {
+        overflow = true;
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    if overflow {
+        if let Some(last) = lines.last_mut() {
+            *last = mark_text_overflow(last, max_cols);
+        }
+    }
+    lines
+}
+
+fn mark_text_overflow(text: &str, max_cols: usize) -> String {
+    if max_cols == 0 {
+        return String::new();
+    }
+    if max_cols <= 3 {
+        return ".".repeat(max_cols);
+    }
+    let head = text
+        .chars()
+        .take(max_cols.saturating_sub(3))
+        .collect::<String>();
+    format!("{head}...")
+}
+
 fn fit_text(text: &str, max_cols: usize) -> String {
     let mut output = String::new();
     for ch in text.replace(['\r', '\n'], " ").chars() {
@@ -3306,4 +3404,33 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
         euclid::Point2D::<f32, PixelUnit>::new(x, y),
         euclid::Size2D::<f32, PixelUnit>::new(width.max(0.0), height.max(0.0)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_text_lines;
+
+    #[test]
+    fn wraps_signal_text_on_word_boundaries() {
+        assert_eq!(
+            wrap_text_lines("fleet kernel cohort requires review", 18, 2),
+            vec!["fleet kernel".to_string(), "cohort requires...".to_string()]
+        );
+    }
+
+    #[test]
+    fn marks_overflow_when_signal_text_exceeds_available_lines() {
+        assert_eq!(
+            wrap_text_lines("fleet kernel cohort requires review", 12, 2),
+            vec!["fleet kernel".to_string(), "cohort...".to_string()]
+        );
+    }
+
+    #[test]
+    fn wraps_long_unbroken_signal_text() {
+        assert_eq!(
+            wrap_text_lines("abcdefghijk", 4, 3),
+            vec!["abcd".to_string(), "efgh".to_string(), "ijk".to_string()]
+        );
+    }
 }
