@@ -845,15 +845,25 @@ impl crate::TermWindow {
             if signal_y + (cell_height * text_rows as f32) > signal_visual_limit {
                 break;
             }
-            paint_lcars_signal_marker(
+            let backing_extra = if structural_signal_text_needs_backing(line.kind) {
+                16.0
+            } else {
+                10.0
+            };
+            let backing_width = ((text_cols as f32 * cell_width) + backing_extra)
+                .min((layout_plan.signal_width - 20.0).max(cell_width * 8.0));
+            paint_lcars_signal_label_bar(
                 self,
                 layers,
                 content_left,
                 signal_y,
                 line.kind,
                 layout_plan.signal_width,
+                backing_width,
+                text_rows,
                 cell_height,
                 lcars.signal_fill(index),
+                lcars,
             )?;
             if line.kind == PanelLineKind::Progress {
                 paint_progress_rail(
@@ -868,24 +878,6 @@ impl crate::TermWindow {
                     lcars.amber,
                 )?;
             }
-            let backing_extra = if structural_signal_text_needs_backing(line.kind) {
-                16.0
-            } else {
-                10.0
-            };
-            let backing_width = ((text_cols as f32 * cell_width) + backing_extra)
-                .min((layout_plan.signal_width - 20.0).max(cell_width * 8.0));
-            self.filled_rectangle(
-                layers,
-                0,
-                rect(
-                    content_left + 14.0,
-                    signal_y - 1.0,
-                    backing_width,
-                    (cell_height * text_rows as f32) + 3.0,
-                ),
-                lcars.black,
-            )?;
             for (text_index, text) in wrapped_text.iter().enumerate() {
                 self.paint_owt_panel_text(
                     layers,
@@ -1771,14 +1763,14 @@ fn structural_signal_text_cols(
     signal_cols: usize,
 ) -> usize {
     let chrome_width = match kind {
+        PanelLineKind::Progress => 132.0,
         PanelLineKind::Bar
         | PanelLineKind::BarRun
         | PanelLineKind::Frame
         | PanelLineKind::ContentBay
         | PanelLineKind::CommandGrid
         | PanelLineKind::DataCascade
-        | PanelLineKind::Section => lcars_signal_marker_width(kind, signal_width - 16.0) + 24.0,
-        PanelLineKind::Progress => 132.0,
+        | PanelLineKind::Section => (cell_width * 4.0).min(signal_width * 0.12),
         _ => 0.0,
     };
     let chrome_cols = (chrome_width / cell_width.max(1.0)).ceil().max(0.0) as usize;
@@ -2622,6 +2614,71 @@ fn paint_lcars_signal_marker(
     Ok(())
 }
 
+fn paint_lcars_signal_label_bar(
+    window: &mut crate::TermWindow,
+    layers: &mut TripleLayerQuadAllocator,
+    x: f32,
+    y: f32,
+    kind: PanelLineKind,
+    available_width: f32,
+    backing_width: f32,
+    text_rows: usize,
+    cell_height: f32,
+    fill: LinearRgba,
+    palette: LcarsPalette,
+) -> anyhow::Result<()> {
+    let rows = text_rows.max(1) as f32;
+    let label_height = cell_height * rows;
+    let tab_height = (label_height + 1.0).max(cell_height * 0.72);
+    let text_x = x + 14.0;
+    let backing_width = backing_width.min((available_width - 24.0).max(1.0));
+    let text_right = (text_x + backing_width + 10.0).min(x + available_width);
+
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(text_x, y - 1.0, backing_width + 8.0, label_height + 4.0),
+        palette.black,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + 3.0, 10.0, tab_height.min(label_height + 4.0)),
+        fill,
+    )?;
+
+    if structural_signal_text_needs_backing(kind) {
+        let header_width = (backing_width * 0.86).min(available_width * 0.36).max(24.0);
+        window.filled_rectangle(layers, 0, rect(text_x, y - 5.0, header_width, 3.0), fill)?;
+        let right_rail_x = (text_right + 10.0)
+            .max(x + available_width * 0.58)
+            .min(x + available_width - 24.0);
+        let right_rail_width = (x + available_width - right_rail_x - 8.0).max(0.0);
+        if right_rail_width >= 18.0 {
+            window.filled_rectangle(
+                layers,
+                0,
+                rect(right_rail_x, y + label_height - 3.0, right_rail_width, 2.0),
+                fill,
+            )?;
+        }
+    } else if matches!(kind, PanelLineKind::Status | PanelLineKind::Badge) {
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(
+                text_x + backing_width + 4.0,
+                y + 4.0,
+                12.0,
+                cell_height * 0.55,
+            ),
+            fill,
+        )?;
+    }
+
+    Ok(())
+}
+
 fn paint_lcars_side_rail_chrome(
     window: &mut crate::TermWindow,
     layers: &mut TripleLayerQuadAllocator,
@@ -2991,17 +3048,23 @@ fn paint_lcars_data_cascade(
         RgbColor::new_8bpc(204, 153, 255),
     ];
 
-    window.filled_rectangle(layers, 0, rect(x, y, width * 0.48, 4.0), palette.dim_violet)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x + width * 0.56, y + 1.0, width * 0.24, 3.0),
+        rect(x - 6.0, y - 6.0, width + 12.0, height + 12.0),
+        palette.black,
+    )?;
+    window.filled_rectangle(layers, 0, rect(x, y, width * 0.44, 4.0), palette.dim_violet)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + width * 0.54, y + 1.0, width * 0.24, 3.0),
         palette.dim_violet,
     )?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y + 8.0, width * 0.33, 3.0),
+        rect(x, y + 8.0, width * 0.30, 3.0),
         palette.amber,
     )?;
     window.filled_rectangle(
@@ -3024,7 +3087,7 @@ fn paint_lcars_data_cascade(
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y + height - 3.0, width * 0.24, 2.0),
+        rect(x, y + height - 3.0, width * 0.22, 2.0),
         palette.peach,
     )?;
     window.filled_rectangle(
@@ -3044,7 +3107,23 @@ fn paint_lcars_data_cascade(
                 with_alpha(palette.dim_violet, 0.64),
             )?;
         }
+        let lane_width = (column_width - 18.0).max(cell_width * 6.0);
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(column_x - 2.0, inner_y - 3.0, lane_width, 1.0),
+            with_alpha(palette.amber, 0.42),
+        )?;
         for row in 0..rows {
+            let row_y = inner_y + (row as f32 * cell_height * 0.96);
+            if row > 0 {
+                window.filled_rectangle(
+                    layers,
+                    0,
+                    rect(column_x + 2.0, row_y - 2.0, lane_width * 0.68, 1.0),
+                    with_alpha(palette.dim_blue, 0.16),
+                )?;
+            }
             let value = seed
                 .wrapping_add((column as u32 + 1) * 0x2511)
                 .wrapping_mul((row as u32 + 3) * 17)
@@ -3057,7 +3136,7 @@ fn paint_lcars_data_cascade(
             window.paint_owt_panel_text(
                 layers,
                 column_x,
-                inner_y + (row as f32 * cell_height * 0.96),
+                row_y,
                 max_cols,
                 &text,
                 colors[(column + row) % colors.len()],
@@ -3942,7 +4021,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_signal_text_reserves_marker_chrome() {
+    fn structural_signal_text_preserves_label_bar_width() {
         let signal_cols = 52;
 
         let content_cols =
@@ -3951,7 +4030,7 @@ mod tests {
             structural_signal_text_cols(PanelLineKind::Metric, 520.0, 10.0, signal_cols);
 
         assert!(content_cols < metric_cols);
-        assert!(content_cols >= 8);
+        assert!(content_cols >= metric_cols.saturating_sub(4));
         assert_eq!(metric_cols, signal_cols - 2);
     }
 
