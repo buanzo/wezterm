@@ -2905,15 +2905,13 @@ fn paint_lcars_structural_console_chrome(
         return Ok(());
     }
 
-    let bank_x = plan.command_left - 10.0;
-    let bank_y = signal_top - 18.0;
-    let bank_width = (plan.command_width + 12.0).max(1.0);
+    let bank_x = plan.command_left - 16.0;
+    let bank_y = signal_top + 2.0;
+    let bank_width = (plan.command_width + 18.0).max(1.0);
     let rows = action_rows.max(1);
-    let bank_height = (40.0
-        + (rows as f32 * button_height)
-        + (rows.saturating_sub(1) as f32 * button_gap)
-        + 12.0)
-        .min((content_bay_y - bank_y - 14.0).max(button_height + 34.0));
+    let bank_height =
+        (2.0 + (rows as f32 * button_height) + (rows.saturating_sub(1) as f32 * button_gap) + 2.0)
+            .min((content_bay_y - bank_y - 14.0).max(button_height + 4.0));
 
     paint_lcars_generated_bitmap(
         window,
@@ -2923,41 +2921,37 @@ fn paint_lcars_structural_console_chrome(
         bank_width,
         bank_height,
         |raster| {
-            let spine_w = 10.0;
-            raster.fill_rect(spine_w, 0.0, bank_width - spine_w, 3.0, LCARS_BYTE_PEACH);
+            let spine_w = 12.0;
+            raster.fill_rect(0.0, 0.0, spine_w, bank_height, LCARS_BYTE_BLACK);
+            raster.fill_rect(0.0, 0.0, 8.0, bank_height, LCARS_BYTE_ORANGE);
+            raster.fill_rect(0.0, 0.0, 8.0, 30.0, LCARS_BYTE_PEACH);
+            raster.fill_rect(0.0, bank_height - 26.0, 8.0, 26.0, LCARS_BYTE_VIOLET);
+            raster.fill_rect(spine_w, 0.0, bank_width * 0.38, 3.0, LCARS_BYTE_PEACH);
             raster.fill_rect(
-                spine_w,
-                9.0,
-                bank_width * 0.55,
-                3.0,
-                LCARS_BYTE_AMBER.with_alpha(215),
-            );
-            raster.fill_rect(0.0, 0.0, spine_w, bank_height, LCARS_BYTE_ORANGE);
-            raster.fill_rect(0.0, 0.0, spine_w, 32.0, LCARS_BYTE_PEACH);
-            raster.fill_rect(0.0, bank_height - 28.0, spine_w, 28.0, LCARS_BYTE_VIOLET);
-            raster.fill_rect(
-                spine_w,
-                bank_height - 4.0,
-                bank_width - spine_w,
+                spine_w + bank_width * 0.48,
+                bank_height - 3.0,
+                bank_width * 0.34,
                 3.0,
                 LCARS_BYTE_AMBER,
             );
-            raster.fill_rect(
-                bank_width - 4.0,
-                0.0,
-                4.0,
-                bank_height,
-                LCARS_BYTE_BLUE.with_alpha(180),
-            );
-            if rows > 1 {
-                for row in 1..rows {
-                    let y = 40.0 + (row as f32 * (button_height + button_gap)) - (button_gap * 0.5);
+            for row in 0..rows {
+                let row_y = 2.0 + (row as f32 * (button_height + button_gap));
+                let rail_y = row_y + (button_height * 0.5) - 1.0;
+                let rail_fill = match row % 4 {
+                    0 => LCARS_BYTE_PEACH,
+                    1 => LCARS_BYTE_VIOLET,
+                    2 => LCARS_BYTE_BLUE,
+                    _ => LCARS_BYTE_AMBER,
+                };
+                raster.fill_rect(spine_w, rail_y, 24.0, 3.0, rail_fill);
+                if row > 0 {
+                    let gutter_y = row_y - (button_gap * 0.5);
                     raster.fill_rect(
                         spine_w,
-                        y,
-                        bank_width - spine_w,
+                        gutter_y,
+                        bank_width * 0.28,
                         2.0,
-                        LCARS_BYTE_BLACK.with_alpha(210),
+                        LCARS_BYTE_BLACK.with_alpha(230),
                     );
                 }
             }
@@ -2997,36 +2991,46 @@ fn paint_lcars_data_cascade(
         RgbColor::new_8bpc(204, 153, 255),
     ];
 
+    window.filled_rectangle(layers, 0, rect(x, y, width * 0.48, 4.0), palette.dim_violet)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y, width, height),
-        with_alpha(palette.black, 0.94),
+        rect(x + width * 0.56, y + 1.0, width * 0.24, 3.0),
+        palette.dim_violet,
     )?;
-    window.filled_rectangle(layers, 0, rect(x, y, width, 4.0), palette.dim_violet)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y + 7.0, width * 0.46, 3.0),
+        rect(x, y + 8.0, width * 0.33, 3.0),
         palette.amber,
     )?;
-    window.filled_rectangle(layers, 0, rect(x, y, 6.0, height), palette.dim_blue)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x + width - 6.0, y, 6.0, height),
+        rect(x, y, 6.0, (height * 0.28).max(18.0)),
         palette.dim_blue,
     )?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y + height - 3.0, width, 2.0),
+        rect(
+            x,
+            y + height - (height * 0.24).max(16.0),
+            6.0,
+            (height * 0.24).max(16.0),
+        ),
         palette.peach,
     )?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x + width * 0.67, y + height - 11.0, width * 0.24, 2.0),
+        rect(x, y + height - 3.0, width * 0.24, 2.0),
+        palette.peach,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + width * 0.68, y + height - 8.0, width * 0.24, 2.0),
         palette.cyan,
     )?;
     for column in 0..columns {
@@ -3036,8 +3040,8 @@ fn paint_lcars_data_cascade(
             window.filled_rectangle(
                 layers,
                 0,
-                rect(column_x - 8.0, inner_y + 1.0, 2.0, inner_height - 4.0),
-                with_alpha(palette.dim_violet, 0.72),
+                rect(column_x - 8.0, inner_y + 5.0, 2.0, inner_height * 0.78),
+                with_alpha(palette.dim_violet, 0.64),
             )?;
         }
         for row in 0..rows {
