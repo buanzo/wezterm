@@ -62,7 +62,7 @@ struct LcarsPalette {
     dim_violet: LinearRgba,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LcarsByteColor {
     red: u8,
     green: u8,
@@ -2537,6 +2537,14 @@ fn lcars_action_fill_byte(index: usize) -> LcarsByteColor {
     }
 }
 
+fn lcars_action_accent_byte(fill_byte: LcarsByteColor, active: bool) -> LcarsByteColor {
+    if active {
+        LCARS_BYTE_SCREEN
+    } else {
+        fill_byte
+    }
+}
+
 fn lcars_signal_marker_width(kind: PanelLineKind, available_width: f32) -> f32 {
     match kind {
         PanelLineKind::Frame => available_width.clamp(72.0, 220.0),
@@ -3076,15 +3084,20 @@ fn paint_lcars_action_button(
     active: bool,
     palette: LcarsPalette,
 ) -> anyhow::Result<()> {
-    let accent_byte = if active { LCARS_BYTE_AMBER } else { fill_byte };
-    let body_fill = if active { palette.amber } else { fill };
+    let accent_byte = lcars_action_accent_byte(fill_byte, active);
+    let body_fill = if active { with_alpha(fill, 0.64) } else { fill };
     let cap_width = height.clamp(18.0, width * 0.42);
     let cap_x = x + width - cap_width;
     let body_width = (width - cap_width * 0.48).max(1.0);
 
     window.filled_rectangle(layers, 0, rect(x, y, body_width, height), body_fill)?;
     paint_lcars_right_cap_bar(window, layers, cap_x, y, cap_width, height, accent_byte)?;
-    window.filled_rectangle(layers, 0, rect(x, y, 11.0, height), palette.black)?;
+    if active {
+        window.filled_rectangle(layers, 0, rect(x, y, 7.0, height), palette.cyan)?;
+        window.filled_rectangle(layers, 0, rect(x + 8.0, y, 7.0, height), palette.black)?;
+    } else {
+        window.filled_rectangle(layers, 0, rect(x, y, 11.0, height), palette.black)?;
+    }
     window.filled_rectangle(
         layers,
         0,
@@ -3100,6 +3113,12 @@ fn paint_lcars_action_button(
         window.filled_rectangle(
             layers,
             0,
+            rect(x + 20.0, y + 5.0, (body_width - 36.0).max(18.0), 2.0),
+            palette.black,
+        )?;
+        window.filled_rectangle(
+            layers,
+            0,
             rect(cap_x - 10.0, y + 6.0, 8.0, (height - 12.0).max(3.0)),
             palette.black,
         )?;
@@ -3107,14 +3126,16 @@ fn paint_lcars_action_button(
 
     let cell_width = window.render_metrics.cell_size.width as f32;
     let cell_height = window.render_metrics.cell_size.height as f32;
-    let label_strip_width = (width - cap_width - 28.0).max(32.0);
+    let pressed_offset = if active { 2.0 } else { 0.0 };
+    let label_strip_x = x + if active { 24.0 } else { 18.0 };
+    let label_strip_width = (width - cap_width - if active { 38.0 } else { 28.0 }).max(32.0);
     let label_strip_height = (cell_height + 6.0).min(height - 8.0).max(cell_height);
-    let label_strip_y = y + ((height - label_strip_height) * 0.5).max(0.0);
+    let label_strip_y = y + ((height - label_strip_height) * 0.5).max(0.0) + pressed_offset;
     window.filled_rectangle(
         layers,
         0,
         rect(
-            x + 18.0,
+            label_strip_x,
             label_strip_y,
             label_strip_width,
             label_strip_height,
@@ -3122,10 +3143,10 @@ fn paint_lcars_action_button(
         palette.black,
     )?;
 
-    let label_cols = ((width - cap_width - 30.0) / cell_width).floor().max(1.0) as usize;
+    let label_cols = (label_strip_width / cell_width).floor().max(1.0) as usize;
     window.paint_owt_panel_text(
         layers,
-        x + 24.0,
+        label_strip_x + 6.0,
         label_strip_y + ((label_strip_height - cell_height) * 0.5).max(0.0),
         label_cols.min(text_cols.max(1)),
         text,
@@ -3601,9 +3622,10 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
 #[cfg(test)]
 mod tests {
     use super::{
-        lcars_structural_breakpoint, plan_lcars_structural_console, structural_signal_text_cols,
+        lcars_action_accent_byte, lcars_action_fill_byte, lcars_structural_breakpoint,
+        plan_lcars_structural_console, structural_signal_text_cols,
         structural_signal_text_needs_backing, structural_signal_visual_limit, wrap_text_lines,
-        LcarsDetailPlacement, LcarsStructuralBreakpoint, PanelLineKind,
+        LcarsDetailPlacement, LcarsStructuralBreakpoint, PanelLineKind, LCARS_BYTE_SCREEN,
     };
 
     #[test]
@@ -3692,6 +3714,19 @@ mod tests {
         assert!(content_cols < metric_cols);
         assert!(content_cols >= 8);
         assert_eq!(metric_cols, signal_cols - 2);
+    }
+
+    #[test]
+    fn active_action_ack_accent_is_distinct_from_default_button_fills() {
+        for index in 0..4 {
+            let default_fill = lcars_action_fill_byte(index);
+            assert_eq!(
+                lcars_action_accent_byte(default_fill, true),
+                LCARS_BYTE_SCREEN
+            );
+            assert_ne!(lcars_action_accent_byte(default_fill, true), default_fill);
+            assert_eq!(lcars_action_accent_byte(default_fill, false), default_fill);
+        }
     }
 
     #[test]
