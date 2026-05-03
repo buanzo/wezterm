@@ -3339,16 +3339,9 @@ fn paint_lcars_table_bay(
                 table_cell_geometry(table_left, table_width, columns, cell_index, cell_width);
             let cell_px_width = (cell_cols as f32 * cell_width - 8.0).max(cell_width * 4.0);
             let fill = table_matrix_cell_fill(row_index, cell_index, columns, lane, palette);
-            let text_x = if fill.is_some() {
-                cell_x + 10.0
-            } else {
-                cell_x + 14.0
-            };
-            let text_cols = if fill.is_some() {
-                cell_cols.saturating_sub(2)
-            } else {
-                cell_cols.saturating_sub(3)
-            };
+            let mut text_x = cell_x + 14.0;
+            let mut text_cols = cell_cols.saturating_sub(3);
+            let mut text_color = table_severity_text(row.severity.as_deref(), cell_index);
             if let Some(fill) = fill {
                 let slab_width = table_matrix_cell_width(cell_index, columns, cell_px_width);
                 window.filled_rectangle(
@@ -3368,6 +3361,31 @@ fn paint_lcars_table_bay(
                     ),
                     fill,
                 )?;
+                let well_height = (cell_height + 6.0).min(row_height - 8.0).max(cell_height);
+                let well_width = (slab_width - 16.0)
+                    .min(cell_px_width - 14.0)
+                    .max(cell_width * 3.5);
+                let well_x = cell_x + 10.0;
+                let well_y = y + ((row_height - well_height) * 0.5).max(0.0);
+                if well_width > cell_width * 2.0 {
+                    window.filled_rectangle(
+                        layers,
+                        0,
+                        rect(well_x, well_y, well_width, well_height),
+                        palette.black,
+                    )?;
+                    text_x = well_x + 6.0;
+                    text_cols = (well_width / cell_width).floor().max(1.0) as usize;
+                    text_color = table_matrix_well_text_color(
+                        row.severity.as_deref(),
+                        cell_index,
+                        row_index,
+                    );
+                } else {
+                    text_x = cell_x + 10.0;
+                    text_cols = cell_cols.saturating_sub(2);
+                    text_color = table_matrix_text_color(true, row.severity.as_deref(), cell_index);
+                }
             } else {
                 window.filled_rectangle(
                     layers,
@@ -3395,7 +3413,7 @@ fn paint_lcars_table_bay(
                 y + 5.0,
                 text_cols,
                 &fit_text_ellipsis(cell, text_cols),
-                table_matrix_text_color(fill.is_some(), row.severity.as_deref(), cell_index),
+                text_color,
                 true,
             )?;
         }
@@ -3533,6 +3551,22 @@ fn table_matrix_text_color(
         return RgbColor::new_8bpc(0, 0, 0);
     }
     table_severity_text(severity, cell_index)
+}
+
+fn table_matrix_well_text_color(
+    severity: Option<&str>,
+    cell_index: usize,
+    row_index: usize,
+) -> RgbColor {
+    if severity.is_some() {
+        return table_severity_text(severity, cell_index);
+    }
+    match (row_index + cell_index) % 4 {
+        0 => RgbColor::new_8bpc(153, 204, 255),
+        1 => RgbColor::new_8bpc(255, 204, 102),
+        2 => RgbColor::new_8bpc(204, 153, 255),
+        _ => RgbColor::new_8bpc(255, 153, 102),
+    }
 }
 
 fn paint_lcars_action_button(
