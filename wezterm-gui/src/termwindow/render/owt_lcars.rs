@@ -2539,7 +2539,7 @@ fn lcars_action_fill_byte(index: usize) -> LcarsByteColor {
 
 fn lcars_action_accent_byte(fill_byte: LcarsByteColor, active: bool) -> LcarsByteColor {
     if active {
-        LCARS_BYTE_SCREEN
+        fill_byte.with_alpha(214)
     } else {
         fill_byte
     }
@@ -3093,8 +3093,13 @@ fn paint_lcars_action_button(
     window.filled_rectangle(layers, 0, rect(x, y, body_width, height), body_fill)?;
     paint_lcars_right_cap_bar(window, layers, cap_x, y, cap_width, height, accent_byte)?;
     if active {
-        window.filled_rectangle(layers, 0, rect(x, y, 7.0, height), palette.cyan)?;
-        window.filled_rectangle(layers, 0, rect(x + 8.0, y, 7.0, height), palette.black)?;
+        window.filled_rectangle(layers, 0, rect(x, y, 13.0, height), palette.black)?;
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(x + 5.0, y + 5.0, 4.0, (height - 10.0).max(4.0)),
+            palette.cyan,
+        )?;
     } else {
         window.filled_rectangle(layers, 0, rect(x, y, 11.0, height), palette.black)?;
     }
@@ -3625,7 +3630,7 @@ mod tests {
         lcars_action_accent_byte, lcars_action_fill_byte, lcars_structural_breakpoint,
         plan_lcars_structural_console, structural_signal_text_cols,
         structural_signal_text_needs_backing, structural_signal_visual_limit, wrap_text_lines,
-        LcarsDetailPlacement, LcarsStructuralBreakpoint, PanelLineKind, LCARS_BYTE_SCREEN,
+        LcarsDetailPlacement, LcarsStructuralBreakpoint, PanelLineKind,
     };
 
     #[test]
@@ -3720,10 +3725,11 @@ mod tests {
     fn active_action_ack_accent_is_distinct_from_default_button_fills() {
         for index in 0..4 {
             let default_fill = lcars_action_fill_byte(index);
-            assert_eq!(
-                lcars_action_accent_byte(default_fill, true),
-                LCARS_BYTE_SCREEN
-            );
+            let active_fill = lcars_action_accent_byte(default_fill, true);
+            assert_eq!(active_fill.red, default_fill.red);
+            assert_eq!(active_fill.green, default_fill.green);
+            assert_eq!(active_fill.blue, default_fill.blue);
+            assert!(active_fill.alpha < default_fill.alpha);
             assert_ne!(lcars_action_accent_byte(default_fill, true), default_fill);
             assert_eq!(lcars_action_accent_byte(default_fill, false), default_fill);
         }
