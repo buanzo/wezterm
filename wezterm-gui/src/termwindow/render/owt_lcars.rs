@@ -709,22 +709,35 @@ impl crate::TermWindow {
             lcars.dim_violet,
         )?;
 
-        let command_width = (panel_width * 0.32).clamp(430.0, 600.0);
-        let command_left = (content_right - command_width).max(content_left + 320.0);
-        let signal_width = (command_left - content_left - 18.0).max(cell_width * 20.0);
-        let cascade_width = if signal_width > 560.0 {
-            (signal_width * 0.42).clamp(220.0, 440.0)
-        } else {
-            0.0
-        };
-        let cascade_left = command_left - cascade_width - 12.0;
-        let signal_text_width = if cascade_width > 0.0 {
-            (cascade_left - content_left - 14.0).max(cell_width * 14.0)
-        } else {
-            signal_width
-        };
-        let signal_cols = (signal_text_width / cell_width).max(8.0) as usize;
-        let action_cols = ((command_width - 26.0) / cell_width).max(8.0) as usize;
+        let content_bay_y = bottom - 52.0;
+        let signal_top = top + 90.0;
+        let signal_limit = content_bay_y - 8.0;
+        let has_table = document_has_kind(document, |kind| matches!(kind, UiNodeKind::Table));
+        let has_data_cascade =
+            document_has_kind(document, |kind| matches!(kind, UiNodeKind::DataCascade));
+        let layout_plan = plan_lcars_structural_console(
+            content_left,
+            content_right,
+            signal_top,
+            signal_limit,
+            cell_width,
+            cell_height,
+            has_table,
+            has_data_cascade,
+        );
+        let table_data = has_table
+            .then(|| {
+                lcars_table_data(
+                    document,
+                    layout_plan.table_max_columns(cell_width),
+                    layout_plan.table_max_rows(cell_height),
+                )
+            })
+            .flatten();
+        let table_detail_ready =
+            table_data.is_some() && layout_plan.detail != LcarsDetailPlacement::None;
+        let signal_cols = (layout_plan.signal_width / cell_width).max(8.0) as usize;
+        let action_cols = ((layout_plan.command_width - 26.0) / cell_width).max(8.0) as usize;
 
         self.paint_owt_panel_text(
             layers,
@@ -745,7 +758,6 @@ impl crate::TermWindow {
             false,
         )?;
 
-        let content_bay_y = bottom - 52.0;
         paint_lcars_content_bay_frame(
             self,
             layers,
@@ -765,14 +777,18 @@ impl crate::TermWindow {
             false,
         )?;
 
-        let mut signal_y = top + 90.0;
-        let signal_limit = content_bay_y - 8.0;
-        for (index, line) in lines
+        let mut signal_y = signal_top;
+        let signal_lines = lines
             .items
             .iter()
             .filter(|line| line.action_id.is_none())
             .filter(|line| !matches!(line.kind, PanelLineKind::Frame | PanelLineKind::CommandGrid))
-            .take(5)
+            .filter(|line| !table_detail_ready || line.kind != PanelLineKind::Table)
+            .collect::<Vec<_>>();
+        let mut shown_signals = 0usize;
+        for (index, line) in signal_lines
+            .iter()
+            .take(layout_plan.signal_rows)
             .enumerate()
         {
             if signal_y + cell_height > signal_limit {
@@ -784,7 +800,7 @@ impl crate::TermWindow {
                 content_left,
                 signal_y,
                 line.kind,
-                signal_text_width,
+                layout_plan.signal_width,
                 cell_height,
                 lcars.signal_fill(index),
             )?;
@@ -792,7 +808,7 @@ impl crate::TermWindow {
                 paint_progress_rail(
                     self,
                     layers,
-                    content_left + signal_text_width - 120.0,
+                    content_left + layout_plan.signal_width - 120.0,
                     signal_y + 5.0,
                     108.0,
                     cell_height * 0.42,
@@ -811,18 +827,40 @@ impl crate::TermWindow {
                 false,
             )?;
             signal_y += cell_height * 1.18;
+            shown_signals += 1;
+        }
+        let hidden_signals = signal_lines.len().saturating_sub(shown_signals);
+        if hidden_signals > 0 && signal_y + cell_height <= signal_limit {
+            self.paint_owt_panel_text(
+                layers,
+                content_left + 18.0,
+                signal_y,
+                signal_cols.saturating_sub(2),
+                &format!("+{hidden_signals} SIGNALS"),
+                RgbColor::new_8bpc(255, 153, 102),
+                true,
+            )?;
         }
 
-        if cascade_width > 0.0
-            && document_has_kind(document, |kind| matches!(kind, UiNodeKind::DataCascade))
-        {
+        if let Some(table) = table_data.as_ref().filter(|_| table_detail_ready) {
+            paint_lcars_table_bay(
+                self,
+                layers,
+                layout_plan.detail_left,
+                layout_plan.detail_top,
+                layout_plan.detail_width,
+                layout_plan.detail_height,
+                table,
+                lcars,
+            )?;
+        } else if layout_plan.detail != LcarsDetailPlacement::None && has_data_cascade {
             paint_lcars_data_cascade(
                 self,
                 layers,
-                cascade_left,
-                top + 90.0,
-                cascade_width,
-                (signal_limit - top - 90.0).max(cell_height * 3.0),
+                layout_plan.detail_left,
+                layout_plan.detail_top,
+                layout_plan.detail_width,
+                layout_plan.detail_height,
                 document,
                 lcars,
             )?;
@@ -830,7 +868,7 @@ impl crate::TermWindow {
 
         self.paint_owt_panel_text(
             layers,
-            command_left + 12.0,
+            layout_plan.command_left + 12.0,
             top + 64.0,
             action_cols,
             "COMMAND GRID",
@@ -840,22 +878,27 @@ impl crate::TermWindow {
         let mut action_count = 0usize;
         let button_height = (cell_height * 2.15).clamp(36.0, 46.0);
         let button_gap = 12.0;
-        let two_columns = command_width >= 360.0;
+        let two_columns = layout_plan.two_action_columns;
         let button_width = if two_columns {
-            ((command_width - button_gap) * 0.5).max(132.0)
+            ((layout_plan.command_width - button_gap) * 0.5).max(132.0)
         } else {
-            command_width
+            layout_plan.command_width
         };
+        let action_lines = lines
+            .items
+            .iter()
+            .filter(|line| line.action_id.is_some())
+            .collect::<Vec<_>>();
         for (index, line) in lines
             .items
             .iter()
             .filter(|line| line.action_id.is_some())
-            .take(if two_columns { 6 } else { 4 })
+            .take(layout_plan.action_slots)
             .enumerate()
         {
             let col = if two_columns { index % 2 } else { 0 };
             let row = if two_columns { index / 2 } else { index };
-            let x = command_left + (col as f32 * (button_width + button_gap));
+            let x = layout_plan.command_left + (col as f32 * (button_width + button_gap));
             let y = top + 92.0 + (row as f32 * (button_height + button_gap));
             if y + button_height > signal_limit {
                 break;
@@ -887,6 +930,18 @@ impl crate::TermWindow {
             }
             action_count += 1;
         }
+        let hidden_actions = action_lines.len().saturating_sub(action_count);
+        if hidden_actions > 0 {
+            self.paint_owt_panel_text(
+                layers,
+                layout_plan.command_left + 12.0,
+                (signal_limit - cell_height).max(top + 92.0),
+                action_cols,
+                &format!("+{hidden_actions} ACTIONS"),
+                RgbColor::new_8bpc(255, 204, 102),
+                true,
+            )?;
+        }
 
         let footer_text = if let Some(action_id) = last_action_id.as_deref() {
             format!("NATIVE RUNTIME / ACK {action_id}")
@@ -897,7 +952,7 @@ impl crate::TermWindow {
         };
         self.paint_owt_panel_text(
             layers,
-            command_left + 12.0,
+            layout_plan.command_left + 12.0,
             content_bay_y + 8.0,
             action_cols,
             &footer_text,
@@ -1523,6 +1578,169 @@ impl PanelLine {
     }
 }
 
+struct LcarsTableData {
+    title: String,
+    columns: Vec<String>,
+    rows: Vec<LcarsTableRow>,
+    overflow_rows: usize,
+}
+
+struct LcarsTableRow {
+    cells: Vec<String>,
+    severity: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LcarsDetailPlacement {
+    None,
+    Inline,
+    Stacked,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LcarsStructuralPlan {
+    command_left: f32,
+    command_width: f32,
+    signal_width: f32,
+    signal_rows: usize,
+    detail: LcarsDetailPlacement,
+    detail_left: f32,
+    detail_top: f32,
+    detail_width: f32,
+    detail_height: f32,
+    action_slots: usize,
+    two_action_columns: bool,
+}
+
+impl LcarsStructuralPlan {
+    fn table_max_columns(self, cell_width: f32) -> usize {
+        let cols = (self.detail_width / cell_width).floor() as usize;
+        if self.detail == LcarsDetailPlacement::None {
+            3
+        } else if cols >= 68 {
+            6
+        } else if cols >= 52 {
+            5
+        } else if cols >= 38 {
+            4
+        } else {
+            3
+        }
+    }
+
+    fn table_max_rows(self, cell_height: f32) -> usize {
+        if self.detail == LcarsDetailPlacement::None {
+            return 3;
+        }
+        let title_and_header = cell_height * 3.4;
+        let row_height = (cell_height * 1.08).max(14.0);
+        ((self.detail_height - title_and_header) / row_height)
+            .floor()
+            .max(2.0) as usize
+    }
+}
+
+fn plan_lcars_structural_console(
+    content_left: f32,
+    content_right: f32,
+    signal_top: f32,
+    signal_limit: f32,
+    cell_width: f32,
+    cell_height: f32,
+    has_table: bool,
+    has_data_cascade: bool,
+) -> LcarsStructuralPlan {
+    let content_width = (content_right - content_left).max(cell_width * 34.0);
+    let min_command_width = (cell_width * 28.0).max(300.0);
+    let desired_command_width = (content_width * 0.30).clamp(min_command_width, 560.0);
+    let command_width = desired_command_width
+        .min(content_width * 0.42)
+        .min((content_width - (cell_width * 24.0)).max(min_command_width.min(content_width)))
+        .max(min_command_width.min(content_width * 0.48));
+    let command_left = content_right - command_width;
+    let pre_command_width = (command_left - content_left - 18.0).max(cell_width * 16.0);
+    let wants_detail = has_table || has_data_cascade;
+    let min_signal_width = cell_width * 24.0;
+    let min_detail_width = if has_table {
+        (cell_width * 38.0).max(320.0)
+    } else {
+        (cell_width * 28.0).max(240.0)
+    };
+    let vertical_span = (signal_limit - signal_top).max(cell_height * 4.0);
+    let available_signal_rows = (vertical_span / (cell_height * 1.18)).floor().max(1.0) as usize;
+    let inline_capacity = pre_command_width - min_signal_width - LCARS_PANEL_GAP;
+
+    let (detail, detail_left, detail_top, detail_width, detail_height, signal_width, signal_rows) =
+        if wants_detail && inline_capacity >= min_detail_width {
+            let max_detail = (inline_capacity * 0.90).min(620.0);
+            let detail_width = clamp_ordered(
+                pre_command_width * if has_table { 0.54 } else { 0.44 },
+                min_detail_width,
+                max_detail,
+            );
+            let detail_left = command_left - detail_width - LCARS_PANEL_GAP;
+            let signal_width = (detail_left - content_left - 14.0).max(min_signal_width);
+            (
+                LcarsDetailPlacement::Inline,
+                detail_left,
+                signal_top,
+                detail_width,
+                vertical_span,
+                signal_width,
+                available_signal_rows.min(5),
+            )
+        } else if wants_detail && vertical_span >= cell_height * 7.0 {
+            let signal_rows = available_signal_rows.min(2);
+            let detail_top =
+                signal_top + (signal_rows as f32 * cell_height * 1.18) + LCARS_PANEL_GAP;
+            let detail_height = (signal_limit - detail_top).max(cell_height * 4.0);
+            (
+                LcarsDetailPlacement::Stacked,
+                content_left,
+                detail_top,
+                pre_command_width,
+                detail_height,
+                pre_command_width,
+                signal_rows,
+            )
+        } else {
+            (
+                LcarsDetailPlacement::None,
+                content_left,
+                signal_top,
+                0.0,
+                0.0,
+                pre_command_width,
+                available_signal_rows.min(5),
+            )
+        };
+
+    let button_height = (cell_height * 2.15).clamp(36.0, 46.0);
+    let button_gap = 12.0;
+    let action_rows = ((signal_limit - (signal_top + 2.0)) / (button_height + button_gap))
+        .floor()
+        .max(0.0) as usize;
+    let two_action_columns = command_width >= cell_width * 42.0;
+    let action_slots = action_rows
+        .saturating_mul(if two_action_columns { 2 } else { 1 })
+        .min(LCARS_KEY_ACTION_LIMIT)
+        .max(1);
+
+    LcarsStructuralPlan {
+        command_left,
+        command_width,
+        signal_width,
+        signal_rows,
+        detail,
+        detail_left,
+        detail_top,
+        detail_width,
+        detail_height,
+        action_slots,
+        two_action_columns,
+    }
+}
+
 fn panel_lines(document: &InterfaceDocument, max_cols: usize) -> PanelLines {
     let mut items = collect_panel_items(document);
     if let Some(action) = crate::owt_native::last_dispatched_action_snapshot() {
@@ -1856,6 +2074,188 @@ fn node_progress_value(node: &UiNode) -> Option<f32> {
         }
     }
     None
+}
+
+fn lcars_table_data(
+    document: &InterfaceDocument,
+    max_columns: usize,
+    max_rows: usize,
+) -> Option<LcarsTableData> {
+    let node = first_node_matching(document, |node| node.kind == UiNodeKind::Table)?;
+    let columns = parse_table_columns(node, max_columns);
+    let mut rows = parse_table_rows(node, columns.len().max(1));
+    let overflow_rows = rows.len().saturating_sub(max_rows);
+    rows.truncate(max_rows);
+    if rows.is_empty() && columns.is_empty() {
+        return None;
+    }
+
+    Some(LcarsTableData {
+        title: node
+            .label
+            .clone()
+            .or_else(|| node.properties.get("title").cloned())
+            .unwrap_or_else(|| "TABLE BAY".to_string()),
+        columns,
+        rows,
+        overflow_rows,
+    })
+}
+
+fn parse_table_columns(node: &UiNode, max_columns: usize) -> Vec<String> {
+    let source = node
+        .properties
+        .get("columns")
+        .or_else(|| node.properties.get("headers"));
+    let mut columns = source
+        .map(|value| split_table_cells(value))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|cell| !cell.trim().is_empty())
+        .take(max_columns.max(1))
+        .collect::<Vec<_>>();
+    if columns.is_empty() {
+        columns = vec!["ITEM".to_string(), "VALUE".to_string(), "STATE".to_string()];
+    }
+    columns
+}
+
+fn parse_table_rows(node: &UiNode, expected_columns: usize) -> Vec<LcarsTableRow> {
+    let mut rows = Vec::new();
+    if let Some(source) = node
+        .properties
+        .get("rows")
+        .or(node.text.as_ref())
+        .filter(|value| !value.trim().is_empty())
+    {
+        for line in split_table_rows(source) {
+            let cells = normalize_table_cells(split_table_cells(&line), expected_columns);
+            if !cells.iter().any(|cell| !cell.trim().is_empty()) {
+                continue;
+            }
+            rows.push(LcarsTableRow {
+                severity: table_row_severity(&cells),
+                cells,
+            });
+        }
+    }
+
+    for child in &node.children {
+        let cells = child
+            .properties
+            .get("cells")
+            .map(|value| split_table_cells(value))
+            .unwrap_or_else(|| {
+                vec![
+                    child.label.clone().unwrap_or_else(|| child.id.clone()),
+                    node_value_text(child, &["value", "state", "status"], ""),
+                ]
+            });
+        let cells = normalize_table_cells(cells, expected_columns);
+        if !cells.iter().any(|cell| !cell.trim().is_empty()) {
+            continue;
+        }
+        rows.push(LcarsTableRow {
+            severity: child
+                .properties
+                .get("severity")
+                .cloned()
+                .or_else(|| table_row_severity(&cells)),
+            cells,
+        });
+    }
+    rows
+}
+
+fn split_table_rows(source: &str) -> Vec<String> {
+    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.contains('\n') {
+        normalized
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    } else {
+        normalized
+            .split(';')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+fn split_table_cells(source: &str) -> Vec<String> {
+    let delimiter = if source.contains('|') {
+        '|'
+    } else if source.contains('\t') {
+        '\t'
+    } else {
+        ','
+    };
+    source
+        .split(delimiter)
+        .map(str::trim)
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_table_cells(mut cells: Vec<String>, expected_columns: usize) -> Vec<String> {
+    let expected_columns = expected_columns.max(1);
+    cells.truncate(expected_columns);
+    while cells.len() < expected_columns {
+        cells.push(String::new());
+    }
+    cells
+}
+
+fn table_row_severity(cells: &[String]) -> Option<String> {
+    let joined = cells.join(" ").to_ascii_lowercase();
+    if joined.contains("error")
+        || joined.contains("failed")
+        || joined.contains("blocked")
+        || joined.contains("unreachable")
+    {
+        Some("error".to_string())
+    } else if joined.contains("warning")
+        || joined.contains("stale")
+        || joined.contains("legacy")
+        || joined.contains("oldest")
+        || joined.contains("watch")
+    {
+        Some("warning".to_string())
+    } else if joined.contains("ok")
+        || joined.contains("ready")
+        || joined.contains("online")
+        || joined.contains("current")
+    {
+        Some("success".to_string())
+    } else {
+        None
+    }
+}
+
+fn first_node_matching<F>(document: &InterfaceDocument, mut predicate: F) -> Option<&UiNode>
+where
+    F: FnMut(&UiNode) -> bool,
+{
+    document
+        .nodes
+        .iter()
+        .find_map(|node| first_node_matching_in(node, &mut predicate))
+}
+
+fn first_node_matching_in<'a, F>(node: &'a UiNode, predicate: &mut F) -> Option<&'a UiNode>
+where
+    F: FnMut(&UiNode) -> bool,
+{
+    if predicate(node) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| first_node_matching_in(child, predicate))
 }
 
 fn parse_progress_value(value: &str) -> Option<f32> {
@@ -2218,6 +2618,201 @@ fn paint_lcars_data_cascade(
         }
     }
     Ok(())
+}
+
+fn paint_lcars_table_bay(
+    window: &mut crate::TermWindow,
+    layers: &mut TripleLayerQuadAllocator,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    table: &LcarsTableData,
+    palette: LcarsPalette,
+) -> anyhow::Result<()> {
+    let cell_width = window.render_metrics.cell_size.width as f32;
+    let cell_height = window.render_metrics.cell_size.height as f32;
+    if width < cell_width * 18.0 || height < cell_height * 4.0 {
+        return Ok(());
+    }
+
+    window.filled_rectangle(layers, 0, rect(x, y - 4.0, width, 2.0), palette.dim_violet)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y, width, height),
+        with_alpha(palette.black, 0.96),
+    )?;
+    window.filled_rectangle(layers, 0, rect(x, y, width, 4.0), palette.amber)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + height - 3.0, width, 2.0),
+        palette.dim_blue,
+    )?;
+    window.filled_rectangle(layers, 0, rect(x, y, 5.0, height), palette.dim_blue)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + width - 5.0, y, 5.0, height),
+        palette.dim_blue,
+    )?;
+
+    let title_cols = ((width - 20.0) / cell_width).max(6.0) as usize;
+    window.paint_owt_panel_text(
+        layers,
+        x + 10.0,
+        y + 7.0,
+        title_cols,
+        &table.title.to_uppercase(),
+        RgbColor::new_8bpc(255, 204, 102),
+        true,
+    )?;
+
+    let columns = table.columns.len().max(1);
+    let table_left = x + 12.0;
+    let table_width = (width - 24.0).max(cell_width * columns as f32);
+    let header_y = y + 28.0;
+    let row_y = header_y + (cell_height * 1.28);
+    let row_height = (cell_height * 1.08).max(14.0);
+    let available_rows = ((height - (row_y - y) - 12.0) / row_height)
+        .floor()
+        .max(0.0) as usize;
+    let visible_rows = table.rows.len().min(available_rows);
+
+    for (index, column) in table.columns.iter().enumerate() {
+        let (cell_x, cell_cols) =
+            table_cell_geometry(table_left, table_width, columns, index, cell_width);
+        let fill = match index % 4 {
+            0 => palette.peach,
+            1 => palette.violet,
+            2 => palette.dim_blue,
+            _ => palette.amber,
+        };
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(
+                cell_x,
+                header_y - 3.0,
+                cell_cols as f32 * cell_width - 4.0,
+                row_height,
+            ),
+            fill,
+        )?;
+        window.paint_owt_panel_text(
+            layers,
+            cell_x + 4.0,
+            header_y,
+            cell_cols.saturating_sub(1),
+            &fit_text_ellipsis(&column.to_uppercase(), cell_cols.saturating_sub(1)),
+            RgbColor::new_8bpc(0, 0, 0),
+            true,
+        )?;
+    }
+
+    for (row_index, row) in table.rows.iter().take(visible_rows).enumerate() {
+        let y = row_y + (row_index as f32 * row_height);
+        let lane = table_severity_fill(row.severity.as_deref(), row_index, palette);
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(table_left, y + 2.0, 8.0, row_height - 4.0),
+            lane,
+        )?;
+        if row_index % 2 == 1 {
+            window.filled_rectangle(
+                layers,
+                0,
+                rect(
+                    table_left + 12.0,
+                    y + row_height - 2.0,
+                    table_width - 12.0,
+                    1.0,
+                ),
+                palette.dim_violet,
+            )?;
+        }
+        for (cell_index, cell) in row.cells.iter().enumerate().take(columns) {
+            let (cell_x, cell_cols) =
+                table_cell_geometry(table_left, table_width, columns, cell_index, cell_width);
+            window.paint_owt_panel_text(
+                layers,
+                cell_x + 4.0,
+                y,
+                cell_cols.saturating_sub(1),
+                &fit_text_ellipsis(cell, cell_cols.saturating_sub(1)),
+                table_severity_text(row.severity.as_deref(), cell_index),
+                false,
+            )?;
+        }
+    }
+
+    let hidden_rows = table.overflow_rows + table.rows.len().saturating_sub(visible_rows);
+    if hidden_rows > 0 {
+        window.paint_owt_panel_text(
+            layers,
+            x + width - 96.0,
+            y + height - cell_height - 4.0,
+            12,
+            &format!("+{hidden_rows} ROWS"),
+            RgbColor::new_8bpc(255, 153, 102),
+            true,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn table_cell_geometry(
+    x: f32,
+    width: f32,
+    columns: usize,
+    index: usize,
+    cell_width: f32,
+) -> (f32, usize) {
+    let columns = columns.max(1);
+    let weights = if columns >= 4 {
+        vec![1.35, 0.85, 1.0, 0.9]
+    } else if columns == 3 {
+        vec![1.25, 1.0, 0.9]
+    } else {
+        vec![1.0; columns]
+    };
+    let total_weight: f32 = weights.iter().take(columns).sum();
+    let prior_weight: f32 = weights.iter().take(index.min(columns)).sum();
+    let cell_weight = weights.get(index).copied().unwrap_or(1.0);
+    let cell_x = x + (width * prior_weight / total_weight);
+    let cell_width_px = width * cell_weight / total_weight;
+    let cell_cols = (cell_width_px / cell_width).floor().max(1.0) as usize;
+    (cell_x, cell_cols)
+}
+
+fn table_severity_fill(severity: Option<&str>, index: usize, palette: LcarsPalette) -> LinearRgba {
+    match severity.map(|value| value.to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "error" | "blocked" | "critical") => palette.red,
+        Some(value) if matches!(value.as_str(), "warning" | "stale" | "legacy") => palette.amber,
+        Some(value) if matches!(value.as_str(), "success" | "ok" | "ready" | "current") => {
+            palette.cyan
+        }
+        _ => palette.signal_fill(index),
+    }
+}
+
+fn table_severity_text(severity: Option<&str>, cell_index: usize) -> RgbColor {
+    match severity.map(|value| value.to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "error" | "blocked" | "critical") => {
+            RgbColor::new_8bpc(255, 102, 102)
+        }
+        Some(value) if matches!(value.as_str(), "warning" | "stale" | "legacy") => {
+            RgbColor::new_8bpc(255, 204, 102)
+        }
+        Some(value) if matches!(value.as_str(), "success" | "ok" | "ready" | "current") => {
+            RgbColor::new_8bpc(153, 204, 255)
+        }
+        _ if cell_index == 0 => RgbColor::new_8bpc(255, 156, 0),
+        _ => RgbColor::new_8bpc(153, 204, 255),
+    }
 }
 
 fn paint_lcars_action_button(
@@ -2621,6 +3216,24 @@ fn compact_scope_id(value: &str) -> String {
         .take(MAX_LEN.saturating_sub(3))
         .collect::<Vec<_>>();
     format!("...{}", tail.into_iter().rev().collect::<String>())
+}
+
+fn fit_text_ellipsis(text: &str, max_cols: usize) -> String {
+    let normalized = text.replace(['\r', '\n'], " ");
+    if max_cols == 0 {
+        return String::new();
+    }
+    if normalized.chars().count() <= max_cols {
+        return normalized;
+    }
+    if max_cols <= 3 {
+        return normalized.chars().take(max_cols).collect();
+    }
+    let head = normalized
+        .chars()
+        .take(max_cols.saturating_sub(3))
+        .collect::<String>();
+    format!("{head}...")
 }
 
 fn fit_text(text: &str, max_cols: usize) -> String {

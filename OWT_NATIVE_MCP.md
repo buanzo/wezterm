@@ -114,8 +114,15 @@ active or supplied interface document into the local OWT profile store, and
 load a saved interface by id. It does not yet expose pane control, external
 action execution, arbitrary import/export packages, or full rich layout
 profiles. The first structural profile, `structural_console`, can render
-semantic `frame`, `side_rail`, `bar_run`, `content_bay`, `data_cascade`, and
-`command_grid` nodes with top+left terminal reflow.
+semantic `frame`, `side_rail`, `bar_run`, `content_bay`, `data_cascade`,
+`table`, and `command_grid` nodes with top+left terminal reflow. `table` nodes
+now get a dedicated LCARS table bay when space allows: columns come from
+`properties.columns`/`properties.headers`, rows come from newline/semicolon
+text or `properties.rows`, and row severity can be inferred from visible cell
+text or supplied through child row properties. The structural renderer also has
+the first layout-planner slice: it sizes the command grid, chooses inline vs
+stacked table/data-cascade detail bays from available geometry, and shows
+explicit hidden signal/action counters instead of silently overpainting.
 
 ## Runtime Ownership
 
@@ -183,7 +190,7 @@ the current static renderer, plus `structural_console` for the first native
 top+left LCARS frame/content-bay mode. It now consumes the first semantic node
 classes directly (`region`, `group`, `frame`, `side_rail`, `content_bay`,
 `bar`, `bar_run`, `elbow`, `data_cascade`, `command_grid`, `badge`, `metric`,
-`progress`, `button`, etc.) instead of treating all nodes as plain summary text. The
+`progress`, `table`, `button`, etc.) instead of treating all nodes as plain summary text. The
 current top/right/bottom surfaces share LCARS marker and action-button
 primitives: marker chrome stays out from under operational text, buttons have
 notch/rule affordance, and the most recently dispatched action is highlighted
@@ -284,6 +291,7 @@ Until external action execution, pane control, and full package lifecycle
 support exist, do not claim that native `OWT.exe` provides the full prototype
 LCARS/control surface. The native endpoint now proves process reachability,
 applied interface state, compact and first structural OWT-owned LCARS render passes, native
+table-bay rendering for semantic operational matrices,
 high-level panel application through the bridge, local save/list/load for
 interface documents in the OWT profile store, `update_node` for atomic
 node-level construction, and side-effect-free action dispatch state for
