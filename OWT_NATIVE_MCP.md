@@ -130,7 +130,9 @@ table/data-cascade detail bays from available geometry, and shows explicit
 hidden signal/action counters instead of silently overpainting. Long structural
 signal rows are now bounded to a small wrapped row budget with ellipsis
 overflow, which reduces the worst text-crowding failure without pretending
-that the full layout engine exists yet.
+that the full layout engine exists yet. Actionless structural interfaces no
+longer reserve or paint the command grid; the planner hides that bay and gives
+the width back to status/table/detail content.
 
 ## Runtime Ownership
 
@@ -301,6 +303,7 @@ LCARS/control surface. The native endpoint now proves process reachability,
 applied interface state, compact and first structural OWT-owned LCARS render passes, native
 table-bay rendering for semantic operational matrices, table/information-shape
 promotion into the structural path, row/column overflow reporting,
+action-aware command-bay suppression for actionless structural panels,
 high-level panel application through the bridge, local save/list/load for
 interface documents in the OWT profile store, `update_node` for atomic
 node-level construction, and side-effect-free action dispatch state for

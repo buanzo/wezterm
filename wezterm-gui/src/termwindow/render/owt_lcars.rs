@@ -716,6 +716,11 @@ impl crate::TermWindow {
         let has_table = document_has_kind(document, |kind| matches!(kind, UiNodeKind::Table));
         let has_data_cascade =
             document_has_kind(document, |kind| matches!(kind, UiNodeKind::DataCascade));
+        let action_lines = lines
+            .items
+            .iter()
+            .filter(|line| line.action_id.is_some())
+            .collect::<Vec<_>>();
         let layout_plan = plan_lcars_structural_console(
             content_left,
             content_right,
@@ -725,6 +730,7 @@ impl crate::TermWindow {
             cell_height,
             has_table,
             has_data_cascade,
+            action_lines.len(),
         );
         let table_data = has_table
             .then(|| {
@@ -738,7 +744,11 @@ impl crate::TermWindow {
         let table_detail_ready =
             table_data.is_some() && layout_plan.detail != LcarsDetailPlacement::None;
         let signal_cols = (layout_plan.signal_width / cell_width).max(8.0) as usize;
-        let action_cols = ((layout_plan.command_width - 26.0) / cell_width).max(8.0) as usize;
+        let action_cols = if layout_plan.command_visible {
+            ((layout_plan.command_width - 26.0) / cell_width).max(8.0) as usize
+        } else {
+            ((content_width * 0.52) / cell_width).max(8.0) as usize
+        };
 
         self.paint_owt_panel_text(
             layers,
@@ -875,15 +885,17 @@ impl crate::TermWindow {
             )?;
         }
 
-        self.paint_owt_panel_text(
-            layers,
-            layout_plan.command_left + 12.0,
-            top + 64.0,
-            action_cols,
-            "COMMAND GRID",
-            RgbColor::new_8bpc(255, 153, 102),
-            true,
-        )?;
+        if layout_plan.command_visible {
+            self.paint_owt_panel_text(
+                layers,
+                layout_plan.command_left + 12.0,
+                top + 64.0,
+                action_cols,
+                "COMMAND GRID",
+                RgbColor::new_8bpc(255, 153, 102),
+                true,
+            )?;
+        }
         let mut action_count = 0usize;
         let button_height = (cell_height * 2.15).clamp(36.0, 46.0);
         let button_gap = 12.0;
@@ -893,15 +905,9 @@ impl crate::TermWindow {
         } else {
             layout_plan.command_width
         };
-        let action_lines = lines
-            .items
+        for (index, line) in action_lines
             .iter()
-            .filter(|line| line.action_id.is_some())
-            .collect::<Vec<_>>();
-        for (index, line) in lines
-            .items
-            .iter()
-            .filter(|line| line.action_id.is_some())
+            .copied()
             .take(layout_plan.action_slots)
             .enumerate()
         {
@@ -940,7 +946,7 @@ impl crate::TermWindow {
             action_count += 1;
         }
         let hidden_actions = action_lines.len().saturating_sub(action_count);
-        if hidden_actions > 0 {
+        if layout_plan.command_visible && hidden_actions > 0 {
             self.paint_owt_panel_text(
                 layers,
                 layout_plan.command_left + 12.0,
@@ -959,9 +965,14 @@ impl crate::TermWindow {
         } else {
             "NATIVE RUNTIME / STRUCTURAL LCARS FRAME".to_string()
         };
+        let footer_left = if layout_plan.command_visible {
+            layout_plan.command_left + 12.0
+        } else {
+            content_left + 18.0
+        };
         self.paint_owt_panel_text(
             layers,
-            layout_plan.command_left + 12.0,
+            footer_left,
             content_bay_y + 8.0,
             action_cols,
             &footer_text,
@@ -1611,6 +1622,7 @@ enum LcarsDetailPlacement {
 struct LcarsStructuralPlan {
     command_left: f32,
     command_width: f32,
+    command_visible: bool,
     signal_width: f32,
     signal_rows: usize,
     detail: LcarsDetailPlacement,
@@ -1659,14 +1671,20 @@ fn plan_lcars_structural_console(
     cell_height: f32,
     has_table: bool,
     has_data_cascade: bool,
+    action_count: usize,
 ) -> LcarsStructuralPlan {
     let content_width = (content_right - content_left).max(cell_width * 34.0);
-    let min_command_width = (cell_width * 28.0).max(300.0);
-    let desired_command_width = (content_width * 0.30).clamp(min_command_width, 560.0);
-    let command_width = desired_command_width
-        .min(content_width * 0.42)
-        .min((content_width - (cell_width * 24.0)).max(min_command_width.min(content_width)))
-        .max(min_command_width.min(content_width * 0.48));
+    let command_visible = action_count > 0;
+    let command_width = if command_visible {
+        let min_command_width = (cell_width * 28.0).max(300.0);
+        let desired_command_width = (content_width * 0.30).clamp(min_command_width, 560.0);
+        desired_command_width
+            .min(content_width * 0.42)
+            .min((content_width - (cell_width * 24.0)).max(min_command_width.min(content_width)))
+            .max(min_command_width.min(content_width * 0.48))
+    } else {
+        0.0
+    };
     let command_left = content_right - command_width;
     let pre_command_width = (command_left - content_left - 18.0).max(cell_width * 16.0);
     let wants_detail = has_table || has_data_cascade;
@@ -1730,15 +1748,20 @@ fn plan_lcars_structural_console(
     let action_rows = ((signal_limit - (signal_top + 2.0)) / (button_height + button_gap))
         .floor()
         .max(0.0) as usize;
-    let two_action_columns = command_width >= cell_width * 42.0;
-    let action_slots = action_rows
-        .saturating_mul(if two_action_columns { 2 } else { 1 })
-        .min(LCARS_KEY_ACTION_LIMIT)
-        .max(1);
+    let two_action_columns = command_visible && command_width >= cell_width * 42.0;
+    let action_slots = if command_visible {
+        action_rows
+            .saturating_mul(if two_action_columns { 2 } else { 1 })
+            .min(LCARS_KEY_ACTION_LIMIT)
+            .max(1)
+    } else {
+        0
+    };
 
     LcarsStructuralPlan {
         command_left,
         command_width,
+        command_visible,
         signal_width,
         signal_rows,
         detail,
@@ -3408,7 +3431,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_text_lines;
+    use super::{plan_lcars_structural_console, wrap_text_lines};
 
     #[test]
     fn wraps_signal_text_on_word_boundaries() {
@@ -3432,5 +3455,20 @@ mod tests {
             wrap_text_lines("abcdefghijk", 4, 3),
             vec!["abcd".to_string(), "efgh".to_string(), "ijk".to_string()]
         );
+    }
+
+    #[test]
+    fn hides_command_grid_when_no_actions_are_declared() {
+        let no_actions =
+            plan_lcars_structural_console(120.0, 1500.0, 90.0, 320.0, 10.0, 20.0, true, false, 0);
+        let with_actions =
+            plan_lcars_structural_console(120.0, 1500.0, 90.0, 320.0, 10.0, 20.0, true, false, 4);
+
+        assert!(!no_actions.command_visible);
+        assert_eq!(no_actions.action_slots, 0);
+        assert_eq!(no_actions.command_width, 0.0);
+        assert!(with_actions.command_visible);
+        assert!(with_actions.action_slots > 0);
+        assert!(no_actions.detail_width >= with_actions.detail_width);
     }
 }

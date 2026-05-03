@@ -42,7 +42,9 @@ no explicit side/bottom layout overrides them, uses a first layout planner to
 choose inline or stacked table/data detail bays and show explicit signal/action
 overflow counters when geometry is tight, wraps long structural signal rows
 within their reserved row budget instead of letting them run into adjacent
-LCARS regions,
+LCARS regions, suppresses the structural command bay when no actions are
+declared, and reclaims that horizontal space for actionless status/table/detail
+interfaces,
 uses harder console bars/command paddles instead of generic rounded desktop
 pills, and shows active `ACK` feedback for the most recently dispatched action.
 The native endpoint also has the first granular
