@@ -939,7 +939,7 @@ impl crate::TermWindow {
                 layout_plan.command_left + 12.0,
                 top + 64.0,
                 action_cols,
-                "COMMAND GRID",
+                "COMMAND BANK",
                 RgbColor::new_8bpc(255, 153, 102),
                 true,
             )?;
@@ -3085,46 +3085,63 @@ fn paint_lcars_action_button(
     palette: LcarsPalette,
 ) -> anyhow::Result<()> {
     let accent_byte = lcars_action_accent_byte(fill_byte, active);
-    let body_fill = if active { with_alpha(fill, 0.64) } else { fill };
-    let cap_width = height.clamp(18.0, width * 0.42);
+    let body_fill = if active { with_alpha(fill, 0.72) } else { fill };
+    let cap_width = (height * 0.58).clamp(14.0, 26.0).min(width * 0.22);
     let cap_x = x + width - cap_width;
-    let body_width = (width - cap_width * 0.48).max(1.0);
+    let body_width = (width - cap_width * 0.42).max(1.0);
+    let label_left = x + 34.0;
+    let label_right_margin = cap_width + 18.0;
+    let label_strip_width = (width - 34.0 - label_right_margin).max(32.0);
 
     window.filled_rectangle(layers, 0, rect(x, y, body_width, height), body_fill)?;
     paint_lcars_right_cap_bar(window, layers, cap_x, y, cap_width, height, accent_byte)?;
+
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y, width - cap_width * 0.4, 4.0),
+        palette.black,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + height - 4.0, width - cap_width * 0.4, 4.0),
+        palette.black,
+    )?;
     if active {
-        window.filled_rectangle(layers, 0, rect(x, y, 13.0, height), palette.black)?;
+        window.filled_rectangle(layers, 0, rect(x, y, 24.0, height), palette.black)?;
         window.filled_rectangle(
             layers,
             0,
-            rect(x + 5.0, y + 5.0, 4.0, (height - 10.0).max(4.0)),
+            rect(x + 7.0, y + 7.0, 5.0, (height - 14.0).max(4.0)),
             palette.cyan,
         )?;
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(x + 15.0, y + 7.0, 4.0, (height - 14.0).max(4.0)),
+            palette.black,
+        )?;
     } else {
-        window.filled_rectangle(layers, 0, rect(x, y, 11.0, height), palette.black)?;
+        window.filled_rectangle(layers, 0, rect(x, y, 24.0, height), palette.black)?;
     }
     window.filled_rectangle(
         layers,
         0,
-        rect(
-            x + 16.0,
-            y + height - 7.0,
-            (width - cap_width - 28.0).max(26.0),
-            3.0,
-        ),
+        rect(label_left, y + height - 9.0, label_strip_width, 3.0),
         palette.black,
     )?;
     if active {
         window.filled_rectangle(
             layers,
             0,
-            rect(x + 20.0, y + 5.0, (body_width - 36.0).max(18.0), 2.0),
+            rect(label_left, y + 7.0, label_strip_width, 2.0),
             palette.black,
         )?;
         window.filled_rectangle(
             layers,
             0,
-            rect(cap_x - 10.0, y + 6.0, 8.0, (height - 12.0).max(3.0)),
+            rect(cap_x - 8.0, y + 7.0, 5.0, (height - 14.0).max(3.0)),
             palette.black,
         )?;
     }
@@ -3132,8 +3149,7 @@ fn paint_lcars_action_button(
     let cell_width = window.render_metrics.cell_size.width as f32;
     let cell_height = window.render_metrics.cell_size.height as f32;
     let pressed_offset = if active { 2.0 } else { 0.0 };
-    let label_strip_x = x + if active { 24.0 } else { 18.0 };
-    let label_strip_width = (width - cap_width - if active { 38.0 } else { 28.0 }).max(32.0);
+    let label_strip_x = label_left;
     let label_strip_height = (cell_height + 6.0).min(height - 8.0).max(cell_height);
     let label_strip_y = y + ((height - label_strip_height) * 0.5).max(0.0) + pressed_offset;
     window.filled_rectangle(
