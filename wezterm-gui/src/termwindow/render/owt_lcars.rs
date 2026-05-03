@@ -751,6 +751,21 @@ impl crate::TermWindow {
         } else {
             ((content_width * 0.52) / cell_width).max(8.0) as usize
         };
+        let button_height = (cell_height * 2.15).clamp(36.0, 46.0);
+        let button_gap = 12.0;
+        let two_columns = layout_plan.two_action_columns;
+        let button_width = if two_columns {
+            ((layout_plan.command_width - button_gap) * 0.5).max(132.0)
+        } else {
+            layout_plan.command_width
+        };
+        let action_columns = if two_columns { 2 } else { 1 };
+        let action_rows = if layout_plan.command_visible {
+            let visible_actions = action_lines.len().min(layout_plan.action_slots);
+            (visible_actions + action_columns - 1) / action_columns
+        } else {
+            0
+        };
 
         self.paint_owt_panel_text(
             layers,
@@ -771,6 +786,19 @@ impl crate::TermWindow {
             false,
         )?;
 
+        paint_lcars_structural_console_chrome(
+            self,
+            layers,
+            content_left,
+            content_right,
+            signal_top,
+            content_bay_y,
+            &layout_plan,
+            action_rows,
+            button_height,
+            button_gap,
+            lcars,
+        )?;
         paint_lcars_content_bay_frame(
             self,
             layers,
@@ -840,20 +868,24 @@ impl crate::TermWindow {
                     lcars.amber,
                 )?;
             }
-            if structural_signal_text_needs_backing(line.kind) {
-                self.filled_rectangle(
-                    layers,
-                    1,
-                    rect(
-                        content_left + 14.0,
-                        signal_y - 1.0,
-                        ((text_cols as f32 * cell_width) + 12.0)
-                            .min((layout_plan.signal_width - 20.0).max(cell_width * 8.0)),
-                        (cell_height * text_rows as f32) + 3.0,
-                    ),
-                    lcars.black,
-                )?;
-            }
+            let backing_extra = if structural_signal_text_needs_backing(line.kind) {
+                16.0
+            } else {
+                10.0
+            };
+            let backing_width = ((text_cols as f32 * cell_width) + backing_extra)
+                .min((layout_plan.signal_width - 20.0).max(cell_width * 8.0));
+            self.filled_rectangle(
+                layers,
+                0,
+                rect(
+                    content_left + 14.0,
+                    signal_y - 1.0,
+                    backing_width,
+                    (cell_height * text_rows as f32) + 3.0,
+                ),
+                lcars.black,
+            )?;
             for (text_index, text) in wrapped_text.iter().enumerate() {
                 self.paint_owt_panel_text(
                     layers,
@@ -945,14 +977,6 @@ impl crate::TermWindow {
             )?;
         }
         let mut action_count = 0usize;
-        let button_height = (cell_height * 2.15).clamp(36.0, 46.0);
-        let button_gap = 12.0;
-        let two_columns = layout_plan.two_action_columns;
-        let button_width = if two_columns {
-            ((layout_plan.command_width - button_gap) * 0.5).max(132.0)
-        } else {
-            layout_plan.command_width
-        };
         for (index, line) in action_lines
             .iter()
             .copied()
@@ -2794,6 +2818,153 @@ fn paint_lcars_bar_run(
     })
 }
 
+fn paint_lcars_structural_console_chrome(
+    window: &mut crate::TermWindow,
+    layers: &mut TripleLayerQuadAllocator,
+    content_left: f32,
+    content_right: f32,
+    signal_top: f32,
+    content_bay_y: f32,
+    plan: &LcarsStructuralPlan,
+    action_rows: usize,
+    button_height: f32,
+    button_gap: f32,
+    palette: LcarsPalette,
+) -> anyhow::Result<()> {
+    let field_width = (content_right - content_left).max(1.0);
+    let upper_rule_y = signal_top - 12.0;
+    let lower_rule_y = content_bay_y - 17.0;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(content_left, upper_rule_y, field_width * 0.32, 3.0),
+        palette.dim_violet,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(
+            content_left + field_width * 0.28,
+            signal_top + 54.0,
+            field_width * 0.22,
+            3.0,
+        ),
+        palette.peach,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(
+            content_left + field_width * 0.42,
+            signal_top + 78.0,
+            field_width * 0.16,
+            2.0,
+        ),
+        palette.cyan,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(content_left, lower_rule_y, field_width * 0.39, 3.0),
+        palette.peach,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(
+            content_left + field_width * 0.54,
+            lower_rule_y + 11.0,
+            field_width * 0.24,
+            3.0,
+        ),
+        palette.dim_violet,
+    )?;
+
+    if plan.detail != LcarsDetailPlacement::None {
+        let detail_rule_y = (plan.detail_top - 7.0).max(signal_top - 8.0);
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(plan.detail_left, detail_rule_y, plan.detail_width, 2.0),
+            palette.dim_violet,
+        )?;
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(
+                plan.detail_left + plan.detail_width * 0.34,
+                detail_rule_y + 20.0,
+                plan.detail_width * 0.28,
+                3.0,
+            ),
+            palette.amber,
+        )?;
+    }
+
+    if !plan.command_visible || plan.command_width <= 0.0 {
+        return Ok(());
+    }
+
+    let bank_x = plan.command_left - 10.0;
+    let bank_y = signal_top - 18.0;
+    let bank_width = (plan.command_width + 12.0).max(1.0);
+    let rows = action_rows.max(1);
+    let bank_height = (40.0
+        + (rows as f32 * button_height)
+        + (rows.saturating_sub(1) as f32 * button_gap)
+        + 12.0)
+        .min((content_bay_y - bank_y - 14.0).max(button_height + 34.0));
+
+    paint_lcars_generated_bitmap(
+        window,
+        layers,
+        bank_x,
+        bank_y,
+        bank_width,
+        bank_height,
+        |raster| {
+            let spine_w = 10.0;
+            raster.fill_rect(spine_w, 0.0, bank_width - spine_w, 3.0, LCARS_BYTE_PEACH);
+            raster.fill_rect(
+                spine_w,
+                9.0,
+                bank_width * 0.55,
+                3.0,
+                LCARS_BYTE_AMBER.with_alpha(215),
+            );
+            raster.fill_rect(0.0, 0.0, spine_w, bank_height, LCARS_BYTE_ORANGE);
+            raster.fill_rect(0.0, 0.0, spine_w, 32.0, LCARS_BYTE_PEACH);
+            raster.fill_rect(0.0, bank_height - 28.0, spine_w, 28.0, LCARS_BYTE_VIOLET);
+            raster.fill_rect(
+                spine_w,
+                bank_height - 4.0,
+                bank_width - spine_w,
+                3.0,
+                LCARS_BYTE_AMBER,
+            );
+            raster.fill_rect(
+                bank_width - 4.0,
+                0.0,
+                4.0,
+                bank_height,
+                LCARS_BYTE_BLUE.with_alpha(180),
+            );
+            if rows > 1 {
+                for row in 1..rows {
+                    let y = 40.0 + (row as f32 * (button_height + button_gap)) - (button_gap * 0.5);
+                    raster.fill_rect(
+                        spine_w,
+                        y,
+                        bank_width - spine_w,
+                        2.0,
+                        LCARS_BYTE_BLACK.with_alpha(210),
+                    );
+                }
+            }
+        },
+    )
+}
+
 fn paint_lcars_data_cascade(
     window: &mut crate::TermWindow,
     layers: &mut TripleLayerQuadAllocator,
@@ -2810,9 +2981,13 @@ fn paint_lcars_data_cascade(
         return Ok(());
     }
 
-    let columns = if width >= 330.0 { 3 } else { 2 };
-    let column_width = width / columns as f32;
-    let rows = ((height / (cell_height * 0.96)).floor() as usize).clamp(2, 7);
+    let inner_x = x + 14.0;
+    let inner_y = y + 11.0;
+    let inner_width = (width - 24.0).max(cell_width * 10.0);
+    let inner_height = (height - 18.0).max(cell_height * 2.0);
+    let columns = if inner_width >= 330.0 { 3 } else { 2 };
+    let column_width = inner_width / columns as f32;
+    let rows = ((inner_height / (cell_height * 0.96)).floor() as usize).clamp(2, 7);
     let seed = document.id.bytes().fold(0u32, |acc, byte| {
         acc.wrapping_mul(33).wrapping_add(byte as u32)
     });
@@ -2822,10 +2997,49 @@ fn paint_lcars_data_cascade(
         RgbColor::new_8bpc(204, 153, 255),
     ];
 
-    window.filled_rectangle(layers, 0, rect(x, y - 4.0, width, 2.0), palette.dim_violet)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y, width, height),
+        with_alpha(palette.black, 0.94),
+    )?;
+    window.filled_rectangle(layers, 0, rect(x, y, width, 4.0), palette.dim_violet)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + 7.0, width * 0.46, 3.0),
+        palette.amber,
+    )?;
+    window.filled_rectangle(layers, 0, rect(x, y, 6.0, height), palette.dim_blue)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + width - 6.0, y, 6.0, height),
+        palette.dim_blue,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + height - 3.0, width, 2.0),
+        palette.peach,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + width * 0.67, y + height - 11.0, width * 0.24, 2.0),
+        palette.cyan,
+    )?;
     for column in 0..columns {
-        let column_x = x + (column as f32 * column_width);
+        let column_x = inner_x + (column as f32 * column_width);
         let max_cols = ((column_width - 6.0) / cell_width).max(5.0) as usize;
+        if column > 0 {
+            window.filled_rectangle(
+                layers,
+                0,
+                rect(column_x - 8.0, inner_y + 1.0, 2.0, inner_height - 4.0),
+                with_alpha(palette.dim_violet, 0.72),
+            )?;
+        }
         for row in 0..rows {
             let value = seed
                 .wrapping_add((column as u32 + 1) * 0x2511)
@@ -2839,7 +3053,7 @@ fn paint_lcars_data_cascade(
             window.paint_owt_panel_text(
                 layers,
                 column_x,
-                y + (row as f32 * cell_height * 0.96),
+                inner_y + (row as f32 * cell_height * 0.96),
                 max_cols,
                 &text,
                 colors[(column + row) % colors.len()],
