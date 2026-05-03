@@ -3163,43 +3163,80 @@ fn paint_lcars_table_bay(
         return Ok(());
     }
 
-    window.filled_rectangle(layers, 0, rect(x, y - 4.0, width, 2.0), palette.dim_violet)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y, width, height),
-        with_alpha(palette.black, 0.96),
+        rect(x - 5.0, y - 8.0, width + 10.0, height + 14.0),
+        palette.black,
     )?;
-    window.filled_rectangle(layers, 0, rect(x, y, width, 4.0), palette.amber)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x, y + height - 3.0, width, 2.0),
-        palette.dim_blue,
+        rect(x, y - 6.0, width * 0.58, 3.0),
+        palette.dim_violet,
     )?;
-    window.filled_rectangle(layers, 0, rect(x, y, 5.0, height), palette.dim_blue)?;
     window.filled_rectangle(
         layers,
         0,
-        rect(x + width - 5.0, y, 5.0, height),
-        palette.dim_blue,
+        rect(x + width * 0.64, y - 5.0, width * 0.24, 2.0),
+        palette.dim_violet,
     )?;
 
-    let title_cols = ((width - 20.0) / cell_width).max(6.0) as usize;
+    let title_bar_h = (cell_height * 1.28).clamp(22.0, 30.0);
+    let title_text_width = (width * 0.35).max(cell_width * 12.0);
+    let title_cols = ((title_text_width - 12.0) / cell_width).max(6.0) as usize;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + 5.0, title_text_width, title_bar_h),
+        palette.black,
+    )?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x, y + 5.0, 10.0, title_bar_h),
+        palette.amber,
+    )?;
     window.paint_owt_panel_text(
         layers,
-        x + 10.0,
-        y + 7.0,
+        x + 14.0,
+        y + 8.0,
         title_cols,
         &table.title.to_uppercase(),
         RgbColor::new_8bpc(255, 204, 102),
         true,
     )?;
+    let mut slab_x = x + title_text_width + 8.0;
+    let slab_y = y + 6.0;
+    let slab_gap = 7.0;
+    for (index, fill) in [palette.peach, palette.violet, palette.dim_blue]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let slab_width = (width
+            * match index {
+                0 => 0.27,
+                1 => 0.24,
+                _ => 0.22,
+            })
+        .min((x + width - slab_x).max(0.0));
+        if slab_width <= 8.0 {
+            break;
+        }
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(slab_x, slab_y, slab_width, title_bar_h * 0.72),
+            fill,
+        )?;
+        slab_x += slab_width + slab_gap;
+    }
 
     let columns = table.columns.len().max(1);
-    let table_left = x + 12.0;
-    let table_width = (width - 24.0).max(cell_width * columns as f32);
-    let header_y = y + 28.0;
+    let table_left = x + 14.0;
+    let table_width = (width - 28.0).max(cell_width * columns as f32);
+    let header_y = y + 42.0;
     let row_y = header_y + (cell_height * 1.28);
     let row_height = (cell_height * 1.08).max(14.0);
     let available_rows = ((height - (row_y - y) - 12.0) / row_height)
@@ -3220,20 +3257,26 @@ fn paint_lcars_table_bay(
             layers,
             0,
             rect(
-                cell_x,
+                cell_x + 2.0,
                 header_y - 3.0,
-                cell_cols as f32 * cell_width - 4.0,
-                row_height,
+                cell_cols as f32 * cell_width - 10.0,
+                3.0,
             ),
+            fill,
+        )?;
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(cell_x + 2.0, header_y + row_height - 3.0, 7.0, 3.0),
             fill,
         )?;
         window.paint_owt_panel_text(
             layers,
-            cell_x + 4.0,
+            cell_x + 12.0,
             header_y,
-            cell_cols.saturating_sub(1),
-            &fit_text_ellipsis(&column.to_uppercase(), cell_cols.saturating_sub(1)),
-            RgbColor::new_8bpc(0, 0, 0),
+            cell_cols.saturating_sub(2),
+            &fit_text_ellipsis(&column.to_uppercase(), cell_cols.saturating_sub(2)),
+            RgbColor::new_8bpc(153, 204, 255),
             true,
         )?;
     }
@@ -3244,22 +3287,23 @@ fn paint_lcars_table_bay(
         window.filled_rectangle(
             layers,
             0,
-            rect(table_left, y + 2.0, 8.0, row_height - 4.0),
+            rect(table_left, y + 2.0, 8.0, row_height * 0.72),
             lane,
         )?;
-        if row_index % 2 == 1 {
-            window.filled_rectangle(
-                layers,
-                0,
-                rect(
-                    table_left + 12.0,
-                    y + row_height - 2.0,
-                    table_width - 12.0,
-                    1.0,
-                ),
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(
+                table_left + 12.0,
+                y + row_height - 2.0,
+                table_width * 0.92,
+                1.0,
+            ),
+            with_alpha(
                 palette.dim_violet,
-            )?;
-        }
+                if row_index % 2 == 0 { 0.50 } else { 0.28 },
+            ),
+        )?;
         for (cell_index, cell) in row.cells.iter().enumerate().take(columns) {
             let (cell_x, cell_cols) =
                 table_cell_geometry(table_left, table_width, columns, cell_index, cell_width);
