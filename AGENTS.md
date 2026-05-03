@@ -40,7 +40,9 @@ overflow, and stable weighted geometry beyond four columns, promotes table or
 information-shape profiles such as `fleet_matrix` into the structural path when
 no explicit side/bottom layout overrides them, uses a first layout planner to
 choose inline or stacked table/data detail bays and show explicit signal/action
-overflow counters when geometry is tight,
+overflow counters when geometry is tight, wraps long structural signal rows
+within their reserved row budget instead of letting them run into adjacent
+LCARS regions,
 uses harder console bars/command paddles instead of generic rounded desktop
 pills, and shows active `ACK` feedback for the most recently dispatched action.
 The native endpoint also has the first granular
@@ -160,7 +162,10 @@ verify the native paint path ran. The renderer now has shared marker/button
 primitives, structural frame/content-bay primitives, first structural-console
 layout planning, table/information-shape structural promotion, row/column
 overflow reporting, and active dispatch feedback, but it is still an early
-native scene slice.
+native scene slice. Structural signal text now has bounded word wrapping plus
+ellipsis overflow for the current top/left structural console path; full
+layout fit scoring, focus/drilldown navigation, and richer table/cohort
+semantics remain pending.
 Keep the listener on loopback; the tools-repo bridge can use Windows interop
 when WSL cannot reach Windows loopback directly. Do not expand this endpoint
 into pane mutation, external action execution, arbitrary import/export

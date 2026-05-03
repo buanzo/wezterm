@@ -127,7 +127,10 @@ geometry supports more than four columns without spilling past the bay and
 reports hidden row/column overflow. The structural renderer also has the first
 layout-planner slice: it sizes the command grid, chooses inline vs stacked
 table/data-cascade detail bays from available geometry, and shows explicit
-hidden signal/action counters instead of silently overpainting.
+hidden signal/action counters instead of silently overpainting. Long structural
+signal rows are now bounded to a small wrapped row budget with ellipsis
+overflow, which reduces the worst text-crowding failure without pretending
+that the full layout engine exists yet.
 
 ## Runtime Ownership
 
