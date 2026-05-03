@@ -1618,6 +1618,13 @@ enum LcarsDetailPlacement {
     Stacked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LcarsStructuralBreakpoint {
+    Compact,
+    Regular,
+    Wide,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LcarsStructuralPlan {
     command_left: f32,
@@ -1662,6 +1669,17 @@ impl LcarsStructuralPlan {
     }
 }
 
+fn lcars_structural_breakpoint(content_width: f32, cell_width: f32) -> LcarsStructuralBreakpoint {
+    let cell_columns = content_width / cell_width.max(1.0);
+    if content_width < 840.0 || cell_columns < 88.0 {
+        LcarsStructuralBreakpoint::Compact
+    } else if content_width < 1280.0 || cell_columns < 132.0 {
+        LcarsStructuralBreakpoint::Regular
+    } else {
+        LcarsStructuralBreakpoint::Wide
+    }
+}
+
 fn plan_lcars_structural_console(
     content_left: f32,
     content_right: f32,
@@ -1674,25 +1692,47 @@ fn plan_lcars_structural_console(
     action_count: usize,
 ) -> LcarsStructuralPlan {
     let content_width = (content_right - content_left).max(cell_width * 34.0);
+    let breakpoint = lcars_structural_breakpoint(content_width, cell_width);
     let command_visible = action_count > 0;
     let command_width = if command_visible {
-        let min_command_width = (cell_width * 28.0).max(300.0);
-        let desired_command_width = (content_width * 0.30).clamp(min_command_width, 560.0);
+        let (min_cells, min_px, max_px, width_ratio, max_ratio): (f32, f32, f32, f32, f32) =
+            match breakpoint {
+                LcarsStructuralBreakpoint::Compact => (20.0, 210.0, 270.0, 0.30, 0.34),
+                LcarsStructuralBreakpoint::Regular => (24.0, 250.0, 390.0, 0.29, 0.36),
+                LcarsStructuralBreakpoint::Wide => (34.0, 360.0, 620.0, 0.31, 0.38),
+            };
+        let min_command_width = (cell_width * min_cells).max(min_px);
+        let command_ceiling = max_px
+            .min(content_width * max_ratio)
+            .max(min_command_width.min(content_width * max_ratio));
+        let desired_command_width = clamp_ordered(
+            content_width * width_ratio,
+            min_command_width,
+            command_ceiling,
+        );
         desired_command_width
-            .min(content_width * 0.42)
-            .min((content_width - (cell_width * 24.0)).max(min_command_width.min(content_width)))
-            .max(min_command_width.min(content_width * 0.48))
+            .min((content_width - (cell_width * 18.0)).max(min_command_width.min(content_width)))
+            .max(min_command_width.min(command_ceiling))
     } else {
         0.0
     };
     let command_left = content_right - command_width;
-    let pre_command_width = (command_left - content_left - 18.0).max(cell_width * 16.0);
-    let wants_detail = has_table || has_data_cascade;
-    let min_signal_width = cell_width * 24.0;
-    let min_detail_width = if has_table {
-        (cell_width * 38.0).max(320.0)
+    let pre_command_width = if command_visible {
+        (command_left - content_left - 18.0).max(cell_width * 16.0)
     } else {
-        (cell_width * 28.0).max(240.0)
+        (content_right - content_left).max(cell_width * 16.0)
+    };
+    let wants_detail = has_table || has_data_cascade;
+    let min_signal_width = match breakpoint {
+        LcarsStructuralBreakpoint::Compact => cell_width * 18.0,
+        LcarsStructuralBreakpoint::Regular => cell_width * 22.0,
+        LcarsStructuralBreakpoint::Wide => cell_width * 26.0,
+    };
+    let min_detail_width = match (breakpoint, has_table) {
+        (LcarsStructuralBreakpoint::Compact, true) => (cell_width * 32.0).max(280.0),
+        (LcarsStructuralBreakpoint::Compact, false) => (cell_width * 22.0).max(210.0),
+        (_, true) => (cell_width * 38.0).max(320.0),
+        (_, false) => (cell_width * 28.0).max(240.0),
     };
     let vertical_span = (signal_limit - signal_top).max(cell_height * 4.0);
     let available_signal_rows = (vertical_span / (cell_height * 1.18)).floor().max(1.0) as usize;
@@ -1700,14 +1740,32 @@ fn plan_lcars_structural_console(
 
     let (detail, detail_left, detail_top, detail_width, detail_height, signal_width, signal_rows) =
         if wants_detail && inline_capacity >= min_detail_width {
-            let max_detail = (inline_capacity * 0.90).min(620.0);
+            let max_detail_px = match breakpoint {
+                LcarsStructuralBreakpoint::Compact => 360.0,
+                LcarsStructuralBreakpoint::Regular => 680.0,
+                LcarsStructuralBreakpoint::Wide => 900.0,
+            };
+            let detail_ratio = match (breakpoint, has_table) {
+                (LcarsStructuralBreakpoint::Compact, true) => 0.56,
+                (LcarsStructuralBreakpoint::Compact, false) => 0.46,
+                (LcarsStructuralBreakpoint::Regular, true) => 0.54,
+                (LcarsStructuralBreakpoint::Regular, false) => 0.46,
+                (LcarsStructuralBreakpoint::Wide, true) => 0.60,
+                (LcarsStructuralBreakpoint::Wide, false) => 0.54,
+            };
+            let max_detail = (inline_capacity * 0.92).min(max_detail_px);
             let detail_width = clamp_ordered(
-                pre_command_width * if has_table { 0.54 } else { 0.44 },
+                pre_command_width * detail_ratio,
                 min_detail_width,
                 max_detail,
             );
             let detail_left = command_left - detail_width - LCARS_PANEL_GAP;
             let signal_width = (detail_left - content_left - 14.0).max(min_signal_width);
+            let max_signal_rows = match breakpoint {
+                LcarsStructuralBreakpoint::Compact => 4,
+                LcarsStructuralBreakpoint::Regular => 5,
+                LcarsStructuralBreakpoint::Wide => 6,
+            };
             (
                 LcarsDetailPlacement::Inline,
                 detail_left,
@@ -1715,10 +1773,13 @@ fn plan_lcars_structural_console(
                 detail_width,
                 vertical_span,
                 signal_width,
-                available_signal_rows.min(5),
+                available_signal_rows.min(max_signal_rows),
             )
         } else if wants_detail && vertical_span >= cell_height * 7.0 {
-            let signal_rows = available_signal_rows.min(2);
+            let signal_rows = available_signal_rows.min(match breakpoint {
+                LcarsStructuralBreakpoint::Compact => 3,
+                LcarsStructuralBreakpoint::Regular | LcarsStructuralBreakpoint::Wide => 2,
+            });
             let detail_top =
                 signal_top + (signal_rows as f32 * cell_height * 1.18) + LCARS_PANEL_GAP;
             let detail_height = (signal_limit - detail_top).max(cell_height * 4.0);
@@ -1732,6 +1793,11 @@ fn plan_lcars_structural_console(
                 signal_rows,
             )
         } else {
+            let max_signal_rows = match breakpoint {
+                LcarsStructuralBreakpoint::Compact => 4,
+                LcarsStructuralBreakpoint::Regular => 5,
+                LcarsStructuralBreakpoint::Wide => 6,
+            };
             (
                 LcarsDetailPlacement::None,
                 content_left,
@@ -1739,7 +1805,7 @@ fn plan_lcars_structural_console(
                 0.0,
                 0.0,
                 pre_command_width,
-                available_signal_rows.min(5),
+                available_signal_rows.min(max_signal_rows),
             )
         };
 
@@ -1748,7 +1814,10 @@ fn plan_lcars_structural_console(
     let action_rows = ((signal_limit - (signal_top + 2.0)) / (button_height + button_gap))
         .floor()
         .max(0.0) as usize;
-    let two_action_columns = command_visible && command_width >= cell_width * 42.0;
+    let two_action_columns = command_visible
+        && !matches!(breakpoint, LcarsStructuralBreakpoint::Compact)
+        && action_count > 2
+        && command_width >= cell_width * 42.0;
     let action_slots = if command_visible {
         action_rows
             .saturating_mul(if two_action_columns { 2 } else { 1 })
@@ -3431,7 +3500,10 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> RectF {
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_lcars_structural_console, wrap_text_lines};
+    use super::{
+        lcars_structural_breakpoint, plan_lcars_structural_console, wrap_text_lines,
+        LcarsDetailPlacement, LcarsStructuralBreakpoint,
+    };
 
     #[test]
     fn wraps_signal_text_on_word_boundaries() {
@@ -3470,5 +3542,29 @@ mod tests {
         assert!(with_actions.command_visible);
         assert!(with_actions.action_slots > 0);
         assert!(no_actions.detail_width >= with_actions.detail_width);
+    }
+
+    #[test]
+    fn structural_breakpoints_keep_compact_command_banks_small() {
+        let compact =
+            plan_lcars_structural_console(120.0, 820.0, 90.0, 320.0, 10.0, 20.0, false, true, 4);
+        let wide =
+            plan_lcars_structural_console(120.0, 1800.0, 90.0, 320.0, 10.0, 20.0, false, true, 4);
+
+        assert_eq!(
+            lcars_structural_breakpoint(700.0, 10.0),
+            LcarsStructuralBreakpoint::Compact
+        );
+        assert_eq!(compact.detail, LcarsDetailPlacement::Inline);
+        assert!(compact.command_visible);
+        assert!(!compact.two_action_columns);
+        assert!(compact.command_width <= 270.0);
+        assert_eq!(
+            lcars_structural_breakpoint(1680.0, 10.0),
+            LcarsStructuralBreakpoint::Wide
+        );
+        assert!(wide.two_action_columns);
+        assert!(wide.command_width > compact.command_width);
+        assert!(wide.detail_width > compact.detail_width);
     }
 }

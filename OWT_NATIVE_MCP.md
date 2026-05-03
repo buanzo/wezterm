@@ -132,7 +132,10 @@ signal rows are now bounded to a small wrapped row budget with ellipsis
 overflow, which reduces the worst text-crowding failure without pretending
 that the full layout engine exists yet. Actionless structural interfaces no
 longer reserve or paint the command grid; the planner hides that bay and gives
-the width back to status/table/detail content.
+the width back to status/table/detail content. The same planner now has a first
+compact/regular/wide breakpoint pass: narrow windows cap the command bank and
+force one action column so the content bay remains readable, while wide windows
+can spend more width on detail/table bays and use a two-column command bank.
 
 ## Runtime Ownership
 
@@ -304,6 +307,8 @@ applied interface state, compact and first structural OWT-owned LCARS render pas
 table-bay rendering for semantic operational matrices, table/information-shape
 promotion into the structural path, row/column overflow reporting,
 action-aware command-bay suppression for actionless structural panels,
+breakpoint-aware command/detail sizing for compact, regular, and wide
+structural consoles,
 high-level panel application through the bridge, local save/list/load for
 interface documents in the OWT profile store, `update_node` for atomic
 node-level construction, and side-effect-free action dispatch state for

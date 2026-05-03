@@ -44,7 +44,9 @@ overflow counters when geometry is tight, wraps long structural signal rows
 within their reserved row budget instead of letting them run into adjacent
 LCARS regions, suppresses the structural command bay when no actions are
 declared, and reclaims that horizontal space for actionless status/table/detail
-interfaces,
+interfaces, uses compact/regular/wide structural breakpoints so command banks
+do not steal narrow-window content space and wide windows give more width to
+table/detail bays,
 uses harder console bars/command paddles instead of generic rounded desktop
 pills, and shows active `ACK` feedback for the most recently dispatched action.
 The native endpoint also has the first granular
@@ -165,9 +167,12 @@ primitives, structural frame/content-bay primitives, first structural-console
 layout planning, table/information-shape structural promotion, row/column
 overflow reporting, and active dispatch feedback, but it is still an early
 native scene slice. Structural signal text now has bounded word wrapping plus
-ellipsis overflow for the current top/left structural console path; full
-layout fit scoring, focus/drilldown navigation, and richer table/cohort
-semantics remain pending.
+ellipsis overflow for the current top/left structural console path. The
+planner now has a first viewport-breakpoint slice: compact widths keep the
+command bank single-column and capped, while regular/wide widths allow larger
+command/detail bays and two-column command banks when action count and space
+justify it. Full layout fit scoring, focus/drilldown navigation, and richer
+table/cohort semantics remain pending.
 Keep the listener on loopback; the tools-repo bridge can use Windows interop
 when WSL cannot reach Windows loopback directly. Do not expand this endpoint
 into pane mutation, external action execution, arbitrary import/export
