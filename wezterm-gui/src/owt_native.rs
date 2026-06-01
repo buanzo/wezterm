@@ -1440,6 +1440,32 @@ fn render_projection_status_map(document: &InterfaceDocument) -> BTreeMap<String
         "reserves_terminal_space".to_string(),
         projection.reserves_terminal_space.to_string(),
     );
+    values.insert(
+        "presentation_tier".to_string(),
+        projection.presentation_tier.to_string(),
+    );
+    values.insert(
+        "solved_edge".to_string(),
+        projection.solved_edge.to_string(),
+    );
+    values.insert(
+        "reserved_terminal".to_string(),
+        projection.reserved_terminal.to_string(),
+    );
+    values.insert(
+        "stable_from_previous".to_string(),
+        projection.stable_from_previous.to_string(),
+    );
+    values.insert(
+        "occlusion_risk".to_string(),
+        projection.occlusion_risk.to_string(),
+    );
+    if let Some(label_fit_state) = projection.label_fit_state {
+        values.insert("label_fit_state".to_string(), label_fit_state);
+    }
+    if let Some(collapse_reason) = projection.collapse_reason {
+        values.insert("collapse_reason".to_string(), collapse_reason);
+    }
     if let Some(anchor) = projection.anchor {
         values.insert("anchor".to_string(), anchor);
     }

@@ -162,6 +162,14 @@ pub struct LayoutSceneSurface {
     pub collapse_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapse_policy: Option<String>,
+    pub presentation_tier: String,
+    pub solved_edge: String,
+    pub reserved_terminal: bool,
+    pub label_fit_state: String,
+    pub occlusion_risk: String,
+    pub stable_from_previous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collapse_reason: Option<String>,
     pub priority: i32,
     pub reserves_terminal_space: bool,
     pub estimated_columns: u16,
@@ -2964,19 +2972,7 @@ fn layout_preview_reserved_space(
     properties: &BTreeMap<String, String>,
 ) -> LayoutReservedSpaceEstimate {
     let reservation_slot = layout_preview_reservation_slot(properties);
-    let profile = string_property(
-        properties,
-        &[
-            "profile",
-            "layout_profile",
-            "composition_profile",
-            "information_shape",
-        ],
-    )
-    .unwrap_or_default()
-    .trim()
-    .to_ascii_lowercase()
-    .replace(['-', ' '], "_");
+    let profile = layout_surface_profile(properties);
 
     let structural_profile = matches!(
         profile.as_str(),
@@ -3029,6 +3025,127 @@ fn layout_preview_reserved_space(
         columns,
         rows,
         basis: "first_pass_static_cells_without_live_viewport".to_string(),
+    }
+}
+
+fn layout_surface_profile(properties: &BTreeMap<String, String>) -> String {
+    string_property(
+        properties,
+        &[
+            "profile",
+            "layout_profile",
+            "composition_profile",
+            "information_shape",
+            "surface_kind",
+            "widget_kind",
+            "shape",
+        ],
+    )
+    .unwrap_or_default()
+    .trim()
+    .to_ascii_lowercase()
+    .replace(['-', ' '], "_")
+}
+
+fn layout_profile_is_action_strip(profile: &str) -> bool {
+    matches!(
+        profile,
+        "action_strip" | "button_strip" | "simple_buttons" | "folder_buttons" | "folder_open_strip"
+    )
+}
+
+fn layout_profile_is_compact_button(profile: &str) -> bool {
+    matches!(
+        profile,
+        "corner_button"
+            | "cycle_render_shortcut"
+            | "floating_button"
+            | "single_button"
+            | "shortcut_button"
+            | "action_button"
+            | "folder_opener"
+    )
+}
+
+fn layout_profile_is_structural(profile: &str) -> bool {
+    matches!(
+        profile,
+        "structural_console"
+            | "fleet_matrix"
+            | "incident_summary"
+            | "queue_triage"
+            | "project_status"
+            | "artifact_browser"
+            | "block_composition"
+            | "semantic_blocks"
+            | "thelcars_control_panel"
+    )
+}
+
+fn layout_presentation_tier(profile: &str, reserved_space: &LayoutReservedSpaceEstimate) -> String {
+    if reserved_space.slot == "hidden" {
+        return "hidden".to_string();
+    }
+    if layout_profile_is_compact_button(profile) {
+        return "compact_action".to_string();
+    }
+    if layout_profile_is_action_strip(profile) {
+        return "action_group".to_string();
+    }
+    if layout_profile_is_structural(profile) {
+        return "structural_surface".to_string();
+    }
+    if !reserved_space.reserves_terminal_space {
+        return if reserved_space.slot == "overlay" {
+            "floating_overlay".to_string()
+        } else {
+            "dock_overlay".to_string()
+        };
+    }
+    "dock_reserved".to_string()
+}
+
+fn layout_label_fit_state(
+    document: &InterfaceDocument,
+    profile: &str,
+    action_page_count: usize,
+) -> String {
+    if !(layout_profile_is_action_strip(profile) || layout_profile_is_compact_button(profile)) {
+        return "not_applicable".to_string();
+    }
+
+    let longest_label = document
+        .actions
+        .iter()
+        .map(|action| action.label.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    if longest_label == 0 {
+        "no_actions".to_string()
+    } else if longest_label <= 12 {
+        "readable".to_string()
+    } else if longest_label <= 18 {
+        "condensed".to_string()
+    } else if action_page_count > 1 {
+        "paged".to_string()
+    } else {
+        "overflow_risk".to_string()
+    }
+}
+
+fn layout_occlusion_risk(visible: bool, reserved_space: &LayoutReservedSpaceEstimate) -> String {
+    if !visible || reserved_space.slot == "hidden" {
+        return "none".to_string();
+    }
+    if reserved_space.reserves_terminal_space {
+        return "low_reserved".to_string();
+    }
+    match reserved_space.slot.as_str() {
+        "top" | "left" => "possible_shell_text_overlap".to_string(),
+        "bottom" | "right" => "possible_terminal_content_overlap".to_string(),
+        "overlay" => "floating_overlay".to_string(),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -3220,6 +3337,17 @@ fn layout_scene_surface(
     let collapse_state = string_property(properties, &["owt_layout_collapse", "collapse_state"])
         .map(ToString::to_string);
     let collapse_policy = layout_collapse_policy(properties);
+    let profile = layout_surface_profile(properties);
+    let solved_edge = solved_slot
+        .as_deref()
+        .unwrap_or(reserved_space.slot.as_str())
+        .to_string();
+    let presentation_tier = layout_presentation_tier(&profile, &reserved_space);
+    let reserved_terminal = reserved_space.reserves_terminal_space;
+    let label_fit_state = layout_label_fit_state(document, &profile, action_page_count);
+    let occlusion_risk = layout_occlusion_risk(visible, &reserved_space);
+    let stable_from_previous = reflow_reason.is_none() && collapse_state.is_none();
+    let collapse_reason = collapse_state.clone();
 
     LayoutSceneSurface {
         interface_id: document.id.clone(),
@@ -3233,6 +3361,13 @@ fn layout_scene_surface(
         reflow_reason,
         collapse_state,
         collapse_policy,
+        presentation_tier,
+        solved_edge,
+        reserved_terminal,
+        label_fit_state,
+        occlusion_risk,
+        stable_from_previous,
+        collapse_reason,
         priority: layout_surface_priority(document, 0),
         reserves_terminal_space: reserved_space.reserves_terminal_space,
         estimated_columns: reserved_space.columns,
@@ -7301,6 +7436,12 @@ mod tests {
         assert_eq!(surface.slot, "top");
         assert_eq!(surface.estimated_rows, 4);
         assert!(surface.reserves_terminal_space);
+        assert_eq!(surface.presentation_tier, "action_group");
+        assert_eq!(surface.solved_edge, "top");
+        assert!(surface.reserved_terminal);
+        assert_eq!(surface.label_fit_state, "condensed");
+        assert_eq!(surface.occlusion_risk, "low_reserved");
+        assert!(surface.stable_from_previous);
     }
 
     #[test]

@@ -27,8 +27,8 @@ const LCARS_PANEL_MARGIN: f32 = 8.0;
 const LCARS_PANEL_GAP: f32 = 12.0;
 const LCARS_PANEL_MIN_HEIGHT: f32 = 166.0;
 const LCARS_PANEL_MAX_HEIGHT: f32 = 196.0;
-const LCARS_ACTION_STRIP_MIN_HEIGHT: f32 = 54.0;
-const LCARS_ACTION_STRIP_MAX_HEIGHT: f32 = 82.0;
+const LCARS_ACTION_STRIP_MIN_HEIGHT: f32 = 42.0;
+const LCARS_ACTION_STRIP_MAX_HEIGHT: f32 = 68.0;
 const LCARS_STRUCTURAL_PANEL_MIN_HEIGHT: f32 = 352.0;
 const LCARS_STRUCTURAL_PANEL_MAX_HEIGHT: f32 = 448.0;
 const LCARS_DOCKED_SURFACE_PANEL_MIN_HEIGHT: f32 = 256.0;
@@ -114,6 +114,15 @@ pub(crate) struct LcarsRenderProjection {
     pub(crate) reservation: &'static str,
     pub(crate) orientation: &'static str,
     pub(crate) reserves_terminal_space: bool,
+    pub(crate) presentation_tier: &'static str,
+    pub(crate) solved_edge: &'static str,
+    pub(crate) reserved_terminal: bool,
+    pub(crate) stable_from_previous: bool,
+    pub(crate) occlusion_risk: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label_fit_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) collapse_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) anchor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -238,24 +247,77 @@ fn lcars_compact_button_reserved_pixels(button_height: f32) -> f32 {
     LCARS_PANEL_MARGIN + 8.0 + button_height + LCARS_PANEL_GAP
 }
 
+fn lcars_action_strip_button_height_from_cell(cell_height: f32) -> f32 {
+    (cell_height * 1.55).clamp(24.0, 34.0)
+}
+
+fn lcars_action_button_label_cols_from_metrics(
+    cell_width: f32,
+    button_height: f32,
+    button_width: f32,
+) -> usize {
+    let tab_width = (button_height * 1.22)
+        .clamp(38.0, 58.0)
+        .min(button_width * 0.30);
+    let cap_width = (button_height * 1.04)
+        .clamp(34.0, 54.0)
+        .min(button_width * 0.24);
+    let label_width = (button_width - tab_width - 8.0 - cap_width - 38.0).max(cell_width * 3.0);
+    (label_width / cell_width).floor().max(1.0) as usize
+}
+
+fn lcars_action_button_required_width(
+    cell_width: f32,
+    button_height: f32,
+    action_chars: usize,
+) -> f32 {
+    let tab_width = (button_height * 1.22).clamp(38.0, 58.0);
+    let cap_width = (button_height * 1.04).clamp(34.0, 54.0);
+    tab_width + 8.0 + cap_width + 38.0 + action_chars.max(4) as f32 * cell_width
+}
+
+fn lcars_corner_button_width_from_metrics(
+    cell_width: f32,
+    text_chars: usize,
+    requested_width: Option<f32>,
+    viewport_width: f32,
+    large_overlay_allowed: bool,
+) -> f32 {
+    let max_viewport_width = (viewport_width - (LCARS_PANEL_MARGIN + 8.0) * 2.0).max(132.0);
+    let text_width = text_chars as f32 * cell_width;
+    let default_width = (text_width + 118.0).clamp(176.0, 300.0);
+    if large_overlay_allowed {
+        return requested_width
+            .unwrap_or(default_width)
+            .clamp(132.0, max_viewport_width);
+    }
+    let compact_max = (text_width + 150.0).clamp(176.0, 320.0);
+    requested_width
+        .unwrap_or(default_width)
+        .clamp(132.0, compact_max.min(max_viewport_width))
+}
+
 fn lcars_action_strip_side_width_from_metrics(
     cell_width: f32,
+    cell_height: f32,
     longest_action_chars: usize,
     requested_width: Option<f32>,
     max_without_starving_terminal: f32,
 ) -> Option<f32> {
-    let rail_width = (cell_width * 7.0).clamp(66.0, 92.0);
+    let button_height = lcars_action_strip_button_height_from_cell(cell_height);
+    let rail_width = (cell_width * 5.5).clamp(50.0, 72.0);
     let target_button_width =
-        ((longest_action_chars as f32 + 2.0) * cell_width + 42.0).clamp(154.0, 248.0);
-    let min_width = (rail_width + 16.0 + cell_width * 8.0).clamp(220.0, 260.0);
-    let preferred_width = (rail_width + 16.0 + target_button_width).clamp(min_width, 360.0);
+        lcars_action_button_required_width(cell_width, button_height, longest_action_chars)
+            .clamp(168.0, 320.0);
+    let min_width = (rail_width + 12.0 + target_button_width).clamp(236.0, 404.0);
+    let preferred_width = (rail_width + 12.0 + target_button_width).clamp(min_width, 460.0);
     if max_without_starving_terminal < min_width {
         return None;
     }
     Some(
         requested_width
             .unwrap_or(preferred_width)
-            .clamp(min_width, max_without_starving_terminal.min(360.0)),
+            .clamp(min_width, max_without_starving_terminal.min(460.0)),
     )
 }
 
@@ -278,6 +340,13 @@ struct LcarsRenderSceneSlotSummary {
     active_count: usize,
     reserved_count: usize,
     interface_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LcarsRenderSceneBadgeMode {
+    Hidden,
+    Compact,
+    Full,
 }
 
 #[derive(Clone, Copy)]
@@ -729,7 +798,7 @@ pub(crate) fn owt_lcars_drag_drop_layout_properties(
     let height = height.max(1.0);
     let x = x.clamp(0.0, width);
     let y = y.clamp(0.0, height);
-    let mut properties = BTreeMap::from([
+    BTreeMap::from([
         ("active".to_string(), "true".to_string()),
         ("placement".to_string(), "free".to_string()),
         ("layout".to_string(), "overlay".to_string()),
@@ -746,15 +815,7 @@ pub(crate) fn owt_lcars_drag_drop_layout_properties(
         ("floating_anchor".to_string(), "center".to_string()),
         ("floating_x".to_string(), format!("{x:.0}")),
         ("floating_y".to_string(), format!("{y:.0}")),
-    ]);
-    let floating_width = (width * 0.54).clamp(420.0, 900.0).min(width);
-    let floating_height = (height * 0.46).clamp(220.0, 520.0).min(height);
-    properties.insert("floating_width".to_string(), format!("{floating_width:.0}"));
-    properties.insert(
-        "floating_height".to_string(),
-        format!("{floating_height:.0}"),
-    );
-    properties
+    ])
 }
 
 fn owt_lcars_drag_drop_action(
@@ -2177,9 +2238,7 @@ impl crate::TermWindow {
 
     fn owt_lcars_action_strip_height_for(&self, document: &InterfaceDocument) -> f32 {
         let cell_height = self.render_metrics.cell_size.height as f32;
-        let button_height = (cell_height * 1.8)
-            .clamp(28.0, 38.0)
-            .min(LCARS_ACTION_STRIP_MAX_HEIGHT);
+        let button_height = lcars_action_strip_button_height_from_cell(cell_height);
         lcars_float_property(
             document,
             &[
@@ -2199,6 +2258,7 @@ impl crate::TermWindow {
         available_width: f32,
     ) -> Option<f32> {
         let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
         if available_width < LCARS_MIN_TERMINAL_REMAINDER + (cell_width * 10.0) {
             return None;
         }
@@ -2222,6 +2282,7 @@ impl crate::TermWindow {
         );
         lcars_action_strip_side_width_from_metrics(
             cell_width,
+            cell_height,
             longest_action_chars,
             requested_width,
             max_without_starving_terminal,
@@ -2406,6 +2467,13 @@ impl crate::TermWindow {
         layers: &mut TripleLayerQuadAllocator,
         summary: &LcarsRenderSceneSummary,
     ) -> anyhow::Result<()> {
+        match lcars_render_scene_badge_mode(summary) {
+            LcarsRenderSceneBadgeMode::Hidden => return Ok(()),
+            LcarsRenderSceneBadgeMode::Compact => {
+                return self.paint_owt_lcars_scene_summary_indicator(layers, summary);
+            }
+            LcarsRenderSceneBadgeMode::Full => {}
+        }
         let Some((title, detail)) = lcars_render_scene_badge_lines(summary) else {
             return Ok(());
         };
@@ -2496,6 +2564,58 @@ impl crate::TermWindow {
         Ok(())
     }
 
+    fn paint_owt_lcars_scene_summary_indicator(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+        summary: &LcarsRenderSceneSummary,
+    ) -> anyhow::Result<()> {
+        let lcars = LcarsPalette::new();
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let detail = if summary.overlay_count > 0 {
+            format!(
+                "{}A/{}R/{}O",
+                summary.active_count, summary.reserved_count, summary.overlay_count
+            )
+        } else {
+            format!("{}A/{}R", summary.active_count, summary.reserved_count)
+        };
+        let width = ((detail.chars().count() as f32 + 5.0) * cell_width).clamp(72.0, 132.0);
+        let height = (cell_height * 1.42).clamp(22.0, 30.0);
+        let margin = LCARS_PANEL_MARGIN + 8.0;
+        let x = (self.dimensions.pixel_width as f32 - width - margin).max(margin);
+        let y = if summary
+            .slots
+            .iter()
+            .any(|slot| slot.slot == "bottom_strip" && slot.reserved_count > 0)
+        {
+            margin + 44.0
+        } else {
+            (self.dimensions.pixel_height as f32 - height - margin).max(margin)
+        };
+        let cap_width = (cell_width * 2.2).clamp(18.0, 28.0);
+        let text_cols = ((width - cap_width - 12.0) / cell_width).floor().max(4.0) as usize;
+        self.filled_rectangle(layers, 0, rect(x, y, width, height), lcars.black)?;
+        paint_lcars_left_cap_bar(
+            self,
+            layers,
+            x,
+            y,
+            cap_width,
+            height,
+            LCARS_BYTE_BLUE.with_alpha(220),
+        )?;
+        self.paint_owt_panel_text(
+            layers,
+            x + cap_width + 8.0,
+            y + (height - cell_height).max(0.0) * 0.5,
+            text_cols,
+            &fit_text_ellipsis(&detail, text_cols),
+            RgbColor::new_8bpc(164, 212, 255),
+            true,
+        )
+    }
+
     fn paint_owt_lcars_action_strip(
         &mut self,
         layers: &mut TripleLayerQuadAllocator,
@@ -2534,9 +2654,7 @@ impl crate::TermWindow {
         };
         let usable_top = border.top.get() as f32 + tab_bar_height + margin;
         let max_width = (viewport_width - margin * 2.0).max(LCARS_NATIVE_SURFACE_MIN_WIDTH);
-        let button_height = (cell_height * 1.8)
-            .clamp(28.0, 38.0)
-            .min(LCARS_ACTION_STRIP_MAX_HEIGHT);
+        let button_height = lcars_action_strip_button_height_from_cell(cell_height);
         let gap = 8.0;
         let label_width = (cell_width * 10.0).clamp(96.0, 132.0);
         let requested_width = lcars_float_property(
@@ -2552,9 +2670,10 @@ impl crate::TermWindow {
             .iter()
             .map(|line| line.text.chars().count())
             .max()
-            .unwrap_or(0) as f32;
+            .unwrap_or(0);
         let target_button_width =
-            ((longest_action_chars + 2.0) * cell_width + 42.0).clamp(154.0, 248.0);
+            lcars_action_button_required_width(cell_width, button_height, longest_action_chars)
+                .clamp(154.0, 320.0);
         let default_width = (label_width
             + gap
             + actions.len() as f32 * target_button_width
@@ -2567,9 +2686,9 @@ impl crate::TermWindow {
         if lcars_action_strip_vertical_rail(placement) {
             let panel_width = self
                 .owt_lcars_action_strip_side_width_for(document, max_width)
-                .unwrap_or((cell_width * 28.0).clamp(240.0, 360.0).min(max_width));
-            let rail_width = (cell_width * 7.0).clamp(66.0, 92.0).min(panel_width * 0.36);
-            let button_width = (panel_width - rail_width - gap * 2.0).max(cell_width * 8.0);
+                .unwrap_or((cell_width * 34.0).clamp(260.0, 460.0).min(max_width));
+            let rail_width = (cell_width * 5.5).clamp(50.0, 72.0).min(panel_width * 0.28);
+            let button_width = (panel_width - rail_width - gap * 1.5).max(cell_width * 10.0);
             let visible_count = actions.len().max(1);
             let page_count = all_actions.len().max(1).div_ceil(LCARS_KEY_ACTION_LIMIT);
             let page_height = if page_count > 1 {
@@ -2603,7 +2722,11 @@ impl crate::TermWindow {
             };
             let top = usable_top;
             let button_left = left + rail_width + gap;
-            let button_cols = ((button_width - 34.0) / cell_width).floor().max(4.0) as usize;
+            let button_cols = lcars_action_button_label_cols_from_metrics(
+                cell_width,
+                button_height,
+                button_width,
+            );
             let title_cols = ((rail_width - 16.0) / cell_width).floor().max(3.0) as usize;
 
             self.filled_rectangle(
@@ -2746,7 +2869,8 @@ impl crate::TermWindow {
             / visible_count as f32)
             .clamp(112.0, target_button_width.max(210.0));
         let button_y = top + ((panel_height - button_height) * 0.5).max(0.0);
-        let text_cols = ((button_width - 34.0) / cell_width).floor().max(4.0) as usize;
+        let text_cols =
+            lcars_action_button_label_cols_from_metrics(cell_width, button_height, button_width);
         let title_cols = ((control_width - 18.0) / cell_width).floor().max(4.0) as usize;
 
         self.filled_rectangle(
@@ -2857,8 +2981,7 @@ impl crate::TermWindow {
         };
         let usable_top = border.top.get() as f32 + tab_bar_height + margin;
         let button_height = self.owt_lcars_corner_button_height_for(document);
-        let text_width = line.text.chars().count() as f32 * cell_width;
-        let button_width = lcars_float_property(
+        let requested_width = lcars_float_property(
             document,
             &[
                 "floating_width",
@@ -2866,9 +2989,15 @@ impl crate::TermWindow {
                 "widget_width",
                 "surface_width",
             ],
-        )
-        .unwrap_or((text_width + 118.0).clamp(176.0, 300.0))
-        .clamp(132.0, (viewport_width - margin * 2.0).max(132.0));
+        );
+        let large_overlay_allowed = lcars_corner_button_large_overlay_allowed(document);
+        let button_width = lcars_corner_button_width_from_metrics(
+            cell_width,
+            line.text.chars().count(),
+            requested_width,
+            viewport_width,
+            large_overlay_allowed,
+        );
         let default_left = match placement.layout {
             LcarsPanelLayout::Left => margin,
             LcarsPanelLayout::Right => (viewport_width - button_width - margin).max(margin),
@@ -2888,7 +3017,7 @@ impl crate::TermWindow {
             LcarsPanelLayout::Bottom => (viewport_height - button_height - margin).max(usable_top),
             _ => usable_top,
         };
-        let (left, top, width, height) = self
+        let (mut left, mut top, mut width, mut height) = self
             .owt_lcars_floating_geometry(
                 document,
                 default_left,
@@ -2900,12 +3029,35 @@ impl crate::TermWindow {
             )
             .map(|floating| (floating.left, floating.top, floating.width, floating.height))
             .unwrap_or((default_left, default_top, button_width, button_height));
+        if !large_overlay_allowed {
+            width = width.clamp(132.0, button_width);
+            height = height.clamp(28.0, button_height);
+            let anchor = lcars_root_property_value(
+                document,
+                &["floating_anchor", "float_anchor", "widget_anchor"],
+            )
+            .unwrap_or("top_left")
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', ' '], "_");
+            if matches!(anchor.as_str(), "center" | "centre" | "cursor") {
+                if let (Some(x), Some(y)) = (
+                    lcars_float_property(document, &["floating_x", "float_x", "widget_x"]),
+                    lcars_float_property(document, &["floating_y", "float_y", "widget_y"]),
+                ) {
+                    left = x - (width / 2.0);
+                    top = y - (height / 2.0);
+                }
+            }
+            left = clamp_ordered(left, margin, viewport_width - width - margin);
+            top = clamp_ordered(top, margin, viewport_height - height - margin);
+        }
         let text_cols = ((width - 42.0) / cell_width).floor().max(4.0) as usize;
         let last_action_id = crate::owt_native::last_dispatched_action_for_interface(&document.id)
             .map(|action| action.action_id);
         let active = last_action_id.as_deref() == line.action_id.as_deref();
 
-        paint_lcars_action_button(
+        paint_lcars_flat_action_button(
             self,
             layers,
             left,
@@ -7636,6 +7788,21 @@ fn lcars_corner_button_mode(document: &InterfaceDocument) -> bool {
     .unwrap_or(false)
 }
 
+fn lcars_corner_button_large_overlay_allowed(document: &InterfaceDocument) -> bool {
+    document_property_value(
+        document,
+        &[
+            "allow_large_overlay",
+            "large_overlay",
+            "resizable_overlay",
+            "allow_resizable_overlay",
+            "owt_allow_large_overlay",
+        ],
+    )
+    .and_then(parse_lcars_bool)
+    .unwrap_or(false)
+}
+
 fn lcars_explicit_terminal_overlay_allowed(document: &InterfaceDocument) -> bool {
     document_property_value(
         document,
@@ -7741,8 +7908,14 @@ pub(crate) fn describe_lcars_render_projection(
     let structural = visible && has_structural_lcars_layout(document);
     let structural_mode = structural.then(|| lcars_structural_mode(document));
     let palette_profile = lcars_palette_profile(document);
-    let expose_floating_geometry = placement.layout == LcarsPanelLayout::Overlay
+    let expose_floating_position = placement.layout == LcarsPanelLayout::Overlay
         && placement.reservation == LcarsSurfaceReservation::Overlay;
+    let expose_floating_size = expose_floating_position
+        && (!corner_button || lcars_corner_button_large_overlay_allowed(document));
+    let collapse_reason =
+        lcars_optional_document_property(document, &["owt_layout_collapse", "collapse_state"]);
+    let reflow_reason =
+        lcars_optional_document_property(document, &["owt_layout_reflow", "layout_reflow_reason"]);
 
     LcarsRenderProjection {
         visible,
@@ -7762,6 +7935,19 @@ pub(crate) fn describe_lcars_render_projection(
         reservation: lcars_surface_reservation_name(placement.reservation),
         orientation: lcars_surface_orientation_name(placement.orientation),
         reserves_terminal_space: placement.reserves_terminal_space(),
+        presentation_tier: lcars_projection_presentation_tier(
+            visible,
+            placement,
+            corner_button,
+            action_strip,
+            structural,
+        ),
+        solved_edge: lcars_panel_layout_name(placement.layout),
+        reserved_terminal: placement.reserves_terminal_space(),
+        stable_from_previous: collapse_reason.is_none() && reflow_reason.is_none(),
+        occlusion_risk: lcars_projection_occlusion_risk(visible, placement),
+        label_fit_state: lcars_projection_label_fit_state(document, action_strip, corner_button),
+        collapse_reason,
         anchor: lcars_optional_document_property(
             document,
             &[
@@ -7789,7 +7975,7 @@ pub(crate) fn describe_lcars_render_projection(
             document,
             &["collapse_policy", "collapse", "overflow_policy"],
         ),
-        floating_anchor: expose_floating_geometry
+        floating_anchor: expose_floating_position
             .then(|| {
                 lcars_optional_document_property(
                     document,
@@ -7797,7 +7983,7 @@ pub(crate) fn describe_lcars_render_projection(
                 )
             })
             .flatten(),
-        floating_x: expose_floating_geometry
+        floating_x: expose_floating_position
             .then(|| {
                 lcars_optional_document_property(
                     document,
@@ -7805,7 +7991,7 @@ pub(crate) fn describe_lcars_render_projection(
                 )
             })
             .flatten(),
-        floating_y: expose_floating_geometry
+        floating_y: expose_floating_position
             .then(|| {
                 lcars_optional_document_property(
                     document,
@@ -7813,7 +7999,7 @@ pub(crate) fn describe_lcars_render_projection(
                 )
             })
             .flatten(),
-        floating_width: expose_floating_geometry
+        floating_width: expose_floating_size
             .then(|| {
                 lcars_optional_document_property(
                     document,
@@ -7826,7 +8012,7 @@ pub(crate) fn describe_lcars_render_projection(
                 )
             })
             .flatten(),
-        floating_height: expose_floating_geometry
+        floating_height: expose_floating_size
             .then(|| {
                 lcars_optional_document_property(
                     document,
@@ -7932,6 +8118,82 @@ fn lcars_surface_orientation_name(orientation: LcarsSurfaceOrientation) -> &'sta
     }
 }
 
+fn lcars_projection_presentation_tier(
+    visible: bool,
+    placement: LcarsSurfacePlacement,
+    corner_button: bool,
+    action_strip: bool,
+    structural: bool,
+) -> &'static str {
+    if !visible {
+        return "hidden";
+    }
+    if corner_button {
+        return "compact_action";
+    }
+    if action_strip {
+        return "action_group";
+    }
+    if structural {
+        return "structural_surface";
+    }
+    if !placement.reserves_terminal_space() {
+        return if matches!(placement.layout, LcarsPanelLayout::Overlay) {
+            "floating_overlay"
+        } else {
+            "dock_overlay"
+        };
+    }
+    "dock_reserved"
+}
+
+fn lcars_projection_label_fit_state(
+    document: &InterfaceDocument,
+    action_strip: bool,
+    corner_button: bool,
+) -> Option<String> {
+    if !(action_strip || corner_button) {
+        return None;
+    }
+    let action_lines = panel_lines(document, 32)
+        .items
+        .iter()
+        .filter(|line| line.action_id.is_some())
+        .map(|line| line.text.chars().count())
+        .collect::<Vec<_>>();
+    let longest_label = action_lines.iter().copied().max().unwrap_or(0);
+    let action_count = document.actions.len().max(action_lines.len());
+    let state = if longest_label == 0 {
+        "no_actions"
+    } else if longest_label <= 12 {
+        "readable"
+    } else if longest_label <= 18 {
+        "condensed"
+    } else if action_count > LCARS_KEY_ACTION_LIMIT {
+        "paged"
+    } else {
+        "overflow_risk"
+    };
+    Some(state.to_string())
+}
+
+fn lcars_projection_occlusion_risk(
+    visible: bool,
+    placement: LcarsSurfacePlacement,
+) -> &'static str {
+    if !visible {
+        return "none";
+    }
+    if placement.reserves_terminal_space() {
+        return "low_reserved";
+    }
+    match placement.layout {
+        LcarsPanelLayout::Top | LcarsPanelLayout::Left => "possible_shell_text_overlap",
+        LcarsPanelLayout::Right | LcarsPanelLayout::Bottom => "possible_terminal_content_overlap",
+        LcarsPanelLayout::Overlay => "floating_overlay",
+    }
+}
+
 fn lcars_render_scene_summary(documents: &[InterfaceDocument]) -> LcarsRenderSceneSummary {
     let mut summary = LcarsRenderSceneSummary::default();
     let mut slots: BTreeMap<&'static str, LcarsRenderSceneSlotSummary> = BTreeMap::new();
@@ -8011,6 +8273,18 @@ fn lcars_render_scene_badge_lines(summary: &LcarsRenderSceneSummary) -> Option<(
         ));
     }
     Some((title.to_string(), parts.join(" / ")))
+}
+
+fn lcars_render_scene_badge_mode(summary: &LcarsRenderSceneSummary) -> LcarsRenderSceneBadgeMode {
+    if summary.conflict_hints.is_empty() {
+        if summary.active_count < 2 {
+            LcarsRenderSceneBadgeMode::Hidden
+        } else {
+            LcarsRenderSceneBadgeMode::Compact
+        }
+    } else {
+        LcarsRenderSceneBadgeMode::Full
+    }
 }
 
 fn lcars_render_scene_slot_label(slot: &LcarsRenderSceneSlotSummary) -> String {
@@ -15207,6 +15481,136 @@ fn paint_lcars_action_button(
     Ok(())
 }
 
+fn paint_lcars_flat_action_button(
+    window: &mut crate::TermWindow,
+    layers: &mut TripleLayerQuadAllocator,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    text_cols: usize,
+    text: &str,
+    text_fg: RgbColor,
+    fill: LinearRgba,
+    fill_byte: LcarsByteColor,
+    active: bool,
+    hotkey: Option<usize>,
+    palette: LcarsPalette,
+) -> anyhow::Result<()> {
+    let hovered = window.owt_lcars_rect_hovered(x, y, width, height);
+    let accent_byte = if active {
+        lcars_action_accent_byte(fill_byte, true)
+    } else if hovered {
+        fill_byte.with_alpha(255)
+    } else {
+        fill_byte.with_alpha(255)
+    };
+    let body_fill = if active || hovered {
+        color(accent_byte.red, accent_byte.green, accent_byte.blue)
+    } else {
+        fill
+    };
+    let cell_width = window.render_metrics.cell_size.width as f32;
+    let cell_height = window.render_metrics.cell_size.height as f32;
+    let tab_width = (height * 1.18).clamp(30.0, 46.0).min(width * 0.26);
+    let tab_gap = 7.0;
+    let cap_width = (height * 0.92).clamp(22.0, 38.0).min(width * 0.18);
+    let body_x = x + tab_width + tab_gap;
+    let body_width = (width - tab_width - tab_gap).max(1.0);
+    let cap_x = x + width - cap_width;
+    let label_strip_x = body_x + 10.0;
+    let label_right = (cap_x - 10.0).max(label_strip_x + cell_width * 3.0);
+    let label_strip_width = (label_right - label_strip_x).max(32.0);
+    let label_strip_height = (cell_height + 3.0)
+        .min((height - 8.0).max(cell_height))
+        .max(cell_height);
+    let label_strip_y = y + ((height - label_strip_height) * 0.5).max(0.0);
+
+    if active || hovered {
+        paint_lcars_cast_shadow(window, layers, x, y, width, height, active, hovered)?;
+    }
+    paint_lcars_left_cap_bar(window, layers, x, y, tab_width, height, accent_byte)?;
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(x + tab_width, y, tab_gap, height),
+        palette.black,
+    )?;
+    window.filled_rectangle(layers, 0, rect(body_x, y, body_width, height), body_fill)?;
+    paint_lcars_right_cap_bar(window, layers, cap_x, y, cap_width, height, accent_byte)?;
+    if active || hovered {
+        paint_lcars_raised_slab_edges(
+            window,
+            layers,
+            body_x,
+            y,
+            body_width,
+            height,
+            accent_byte,
+            active,
+            hovered,
+        )?;
+    }
+    window.filled_rectangle(
+        layers,
+        0,
+        rect(
+            label_strip_x,
+            label_strip_y,
+            label_strip_width,
+            label_strip_height,
+        ),
+        palette.black,
+    )?;
+    if active || hovered {
+        window.filled_rectangle(
+            layers,
+            0,
+            rect(
+                label_strip_x,
+                label_strip_y + label_strip_height - 3.0,
+                label_strip_width * 0.58,
+                2.0,
+            ),
+            if active {
+                palette.peach
+            } else {
+                palette.dim_blue
+            },
+        )?;
+    }
+    if let Some(hotkey) = hotkey {
+        let hotkey_text = format!("{hotkey:02}");
+        let hotkey_cols = (tab_width / cell_width).floor().max(1.0) as usize;
+        window.paint_owt_panel_text(
+            layers,
+            x + 5.0,
+            y + ((height - cell_height) * 0.5).max(0.0),
+            hotkey_cols,
+            &hotkey_text,
+            RgbColor::new_8bpc(0, 0, 0),
+            true,
+        )?;
+    }
+    let label_cols = (label_strip_width / cell_width).floor().max(1.0) as usize;
+    let visible_label_cols = label_cols.min(text_cols.max(1));
+    window.paint_owt_panel_text(
+        layers,
+        label_strip_x + 6.0,
+        label_strip_y + ((label_strip_height - cell_height) * 0.5).max(0.0),
+        visible_label_cols,
+        &fit_text_ellipsis(text, visible_label_cols),
+        if active {
+            RgbColor::new_8bpc(255, 240, 176)
+        } else if hovered {
+            RgbColor::new_8bpc(255, 204, 112)
+        } else {
+            text_fg
+        },
+        true,
+    )
+}
+
 fn paint_lcars_left_cap_bar(
     window: &mut crate::TermWindow,
     layers: &mut TripleLayerQuadAllocator,
@@ -15865,12 +16269,14 @@ mod tests {
         assign_lcars_hotkeys, clamp_to_available, collect_panel_items,
         compute_lcars_structural_scene, compute_thelcars_cockpit_grid,
         describe_lcars_render_projection, has_structural_lcars_layout, lcars_action_accent_byte,
-        lcars_action_fill_byte, lcars_action_strip_mode,
+        lcars_action_button_label_cols_from_metrics, lcars_action_fill_byte,
+        lcars_action_strip_button_height_from_cell, lcars_action_strip_mode,
         lcars_action_strip_side_width_from_metrics, lcars_action_strip_vertical_rail,
         lcars_block_composition_data, lcars_compact_button_reserved_pixels,
-        lcars_corner_button_mode, lcars_depth_metrics, lcars_keyboard_action_slots,
+        lcars_corner_button_large_overlay_allowed, lcars_corner_button_mode,
+        lcars_corner_button_width_from_metrics, lcars_depth_metrics, lcars_keyboard_action_slots,
         lcars_next_saved_owner_filter, lcars_palette_profile, lcars_primitive_legend_rows,
-        lcars_render_scene_badge_lines, lcars_render_scene_summary,
+        lcars_render_scene_badge_lines, lcars_render_scene_badge_mode, lcars_render_scene_summary,
         lcars_saved_interface_menu_detail, lcars_saved_menu_status,
         lcars_saved_owner_filter_detail, lcars_scope_owner_label, lcars_structural_breakpoint,
         lcars_structural_mode, lcars_surface_menu_properties, lcars_surface_menu_slot_rects,
@@ -15886,10 +16292,10 @@ mod tests {
         thelcars_adaptive_layout_label, thelcars_cockpit_detail_text, thelcars_demo_metadata,
         thelcars_metric_count, thelcars_navigation_labels, thelcars_signal_lines,
         thelcars_theme_labels, wrap_text_lines, LcarsDetailPlacement, LcarsPaletteProfile,
-        LcarsPanelLayout, LcarsSceneRect, LcarsStructuralBreakpoint, LcarsStructuralMode,
-        LcarsSurfaceMenuAction, LcarsSurfaceOrientation, LcarsSurfaceOrigin, LcarsSurfacePlacement,
-        LcarsSurfaceReservation, LcarsTableGroupSummary, PanelLine, PanelLineKind,
-        TheLcarsCockpitDensity, TheLcarsDemoMetadata, LCARS_BOTTOM_PANEL_MIN_HEIGHT,
+        LcarsPanelLayout, LcarsRenderSceneBadgeMode, LcarsSceneRect, LcarsStructuralBreakpoint,
+        LcarsStructuralMode, LcarsSurfaceMenuAction, LcarsSurfaceOrientation, LcarsSurfaceOrigin,
+        LcarsSurfacePlacement, LcarsSurfaceReservation, LcarsTableGroupSummary, PanelLine,
+        PanelLineKind, TheLcarsCockpitDensity, TheLcarsDemoMetadata, LCARS_BOTTOM_PANEL_MIN_HEIGHT,
         LCARS_PANEL_GAP, LCARS_PANEL_MARGIN, LCARS_SIDE_PANEL_MIN_WIDTH,
     };
     use crate::termwindow::{OwtLcarsSurfaceMenuMode, OwtLcarsSurfaceMenuState};
@@ -16270,6 +16676,9 @@ mod tests {
         let projection = describe_lcars_render_projection(&document);
         assert!(lcars_action_strip_mode(&document));
         assert_eq!(projection.renderer_path, "action_strip");
+        assert_eq!(projection.presentation_tier, "action_group");
+        assert_eq!(projection.solved_edge, "top");
+        assert_eq!(projection.label_fit_state.as_deref(), Some("readable"));
         assert!(!has_structural_lcars_layout(&document));
         assert_eq!(
             lcars_keyboard_action_slots(&document),
@@ -16319,11 +16728,17 @@ mod tests {
 
     #[test]
     fn action_strip_side_width_is_content_sized() {
-        let width = lcars_action_strip_side_width_from_metrics(9.0, 10, None, 1400.0)
+        let button_height = lcars_action_strip_button_height_from_cell(18.0);
+        let width = lcars_action_strip_side_width_from_metrics(9.0, 18.0, 10, None, 1400.0)
             .expect("side action strip width");
+        let rail_width = (9.0_f32 * 5.5).clamp(50.0, 72.0).min(width * 0.28);
+        let button_width = width - rail_width - 8.0 * 1.5;
+        let label_cols =
+            lcars_action_button_label_cols_from_metrics(9.0, button_height, button_width);
 
         assert!(width < LCARS_SIDE_PANEL_MIN_WIDTH);
-        assert!(width >= 220.0);
+        assert!(width >= 260.0);
+        assert!(label_cols >= 10);
     }
 
     #[test]
@@ -16423,8 +16838,59 @@ mod tests {
         assert_eq!(projection.floating_anchor.as_deref(), Some("center"));
         assert_eq!(projection.floating_x.as_deref(), Some("640"));
         assert_eq!(projection.floating_y.as_deref(), Some("360"));
-        assert_eq!(projection.floating_width.as_deref(), Some("220"));
-        assert_eq!(projection.floating_height.as_deref(), Some("42"));
+        assert_eq!(projection.presentation_tier, "compact_action");
+        assert!(!lcars_corner_button_large_overlay_allowed(&document));
+        assert_eq!(projection.floating_width, None);
+        assert_eq!(projection.floating_height, None);
+        assert_eq!(
+            lcars_corner_button_width_from_metrics(9.0, 7, Some(900.0), 1920.0, false),
+            213.0
+        );
+    }
+
+    #[test]
+    fn corner_button_large_overlay_opt_in_preserves_floating_size_metadata() {
+        let mut document = InterfaceDocument::new(
+            "lcars.test.corner_button.large-overlay",
+            "SINGLES RENDERS",
+            Scope::new(ScopeKind::Project, "/tmp/owt-corner-button-overlay"),
+        );
+        document.theme = Some("lcars".to_string());
+        document.actions.push(UiAction::new(
+            "cycles.carriersingles.renders.open",
+            "SINGLES RENDERS",
+            ActionKind::Open,
+        ));
+
+        let mut root = UiNode::new("root", UiNodeKind::Panel);
+        root.properties
+            .insert("layout".to_string(), "overlay".to_string());
+        root.properties
+            .insert("reservation".to_string(), "overlay".to_string());
+        root.properties
+            .insert("profile".to_string(), "corner_button".to_string());
+        root.properties
+            .insert("allow_terminal_overlay".to_string(), "true".to_string());
+        root.properties
+            .insert("allow_large_overlay".to_string(), "true".to_string());
+        root.properties
+            .insert("floating_width".to_string(), "520".to_string());
+        root.properties
+            .insert("floating_height".to_string(), "260".to_string());
+        let mut button = UiNode::new("button.open", UiNodeKind::Button);
+        button.action_id = Some("cycles.carriersingles.renders.open".to_string());
+        root.children.push(button);
+        document.nodes.push(root);
+
+        let projection = describe_lcars_render_projection(&document);
+
+        assert!(lcars_corner_button_large_overlay_allowed(&document));
+        assert_eq!(projection.floating_width.as_deref(), Some("520"));
+        assert_eq!(projection.floating_height.as_deref(), Some("260"));
+        assert_eq!(
+            lcars_corner_button_width_from_metrics(9.0, 7, Some(900.0), 1920.0, true),
+            900.0
+        );
     }
 
     #[test]
@@ -17735,6 +18201,10 @@ mod tests {
             .unwrap()
             .1
             .contains("3A / 2R / 1O"));
+        assert_eq!(
+            lcars_render_scene_badge_mode(&summary),
+            LcarsRenderSceneBadgeMode::Compact
+        );
     }
 
     #[test]
@@ -17754,6 +18224,10 @@ mod tests {
                 "SCENE CONFLICT".to_string(),
                 "2A / 2R / L2R / L2 CONFLICT".to_string()
             ))
+        );
+        assert_eq!(
+            lcars_render_scene_badge_mode(&summary),
+            LcarsRenderSceneBadgeMode::Full
         );
     }
 
@@ -18042,8 +18516,8 @@ mod tests {
         );
         assert_eq!(overlay.get("floating_x").map(String::as_str), Some("600"));
         assert_eq!(overlay.get("floating_y").map(String::as_str), Some("400"));
-        assert!(overlay.contains_key("floating_width"));
-        assert!(overlay.contains_key("floating_height"));
+        assert!(!overlay.contains_key("floating_width"));
+        assert!(!overlay.contains_key("floating_height"));
 
         assert_eq!(
             owt_lcars_drag_drop_target_text(8.0, 400.0, 1200.0, 800.0),
