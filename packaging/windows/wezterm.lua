@@ -7,6 +7,14 @@ config.font = wezterm.font_with_fallback({
   "Courier New",
 })
 config.font_size = 11.0
+config.use_fancy_tab_bar = true
+config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+config.owt_lcars_window_chrome = true
+
+local requested_front_end = os.getenv("OWT_FRONT_END") or ""
+if requested_front_end ~= "" then
+  config.front_end = requested_front_end
+end
 
 local existing_wslenv = os.getenv("WSLENV") or ""
 local owt_wslenv = table.concat({

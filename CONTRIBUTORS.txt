@@ -60,13 +60,209 @@ OpenAI Codex / Jadzia
 - Hardened the docked native LCARS top-band renderer so semantic rows and
   action buttons stop before the footer guard, preventing internal text
   overlap at the current OWT font/cell size.
+- Added the first focused-row `CELL DETAIL` readout in the native structural
+  table renderer so cell-level severity/provenance marks are mapped back to
+  visible table columns instead of only appearing as a mark count.
 - Added native local interface lifecycle endpoints and bridge tools:
   `list_interfaces`, `save_interface`, and `load_interface`, storing semantic
   interface documents in the local OWT profile store rather than arbitrary
   caller-supplied paths.
+- Added native `patch_interface_layout` endpoint/bridge support so agents can
+  mutate docking, orientation, reservation, and visibility properties on an
+  active LCARS interface without replacing its semantic nodes or actions.
+- Added the first terminal-owned LCARS surface context menu on tab-title
+  secondary click, with hide/show and docking/overlay actions backed by native
+  layout-property patches.
+- Refined the terminal-owned LCARS surface menu so operator-facing controls no
+  longer expose a separate activate/deactivate concept: the menu now offers
+  hide, show/restore, docking/overlay moves, and a local saved-interface picker
+  backed by the OWT profile store.
 - Refactored the current native LCARS renderer around shared marker/button
   primitives for top/right/bottom surfaces, preventing marker-over-text
   rendering and adding visible active `ACK` feedback for dispatched actions.
+- Reworked native LCARS structural chrome toward chunkier asymmetric console
+  language: dominant top-left elbow sweep, segmented rails, embedded label
+  tabs, bracketed content bay chrome, numbered command paddles, and physical
+  ACK-state cap/rail feedback.
+- Started the native LCARS layout-engine slice by adding a computed structural
+  scene for `structural_console`, centralizing protected label tabs, content
+  bay geometry, command-bank frame/button metrics, and structural chrome
+  placement before paint.
+- Added a native `primitive_legend` diagnostic mode that renders each semantic
+  primitive as a fixed numbered LCARS row, keeping table and command-grid nodes
+  inspectable instead of promoting them into the structural composition layout.
+- Repaired native LCARS action-button rendering so command banks prefer
+  declared action labels and draw physical slab paddles with wider numbered
+  side tabs, inset black label bays, colored right caps, and stronger ACK
+  state.
+- Reworked the default native LCARS composed benchmark so table/data details no
+  longer dominate the screen, command banks stay as stacked paddles, side rails
+  read as segmented chrome instead of a solid wall, and table rows render as
+  bracketed black data bays rather than app-style pill rows.
+- Added a low-noise `docked_surface` structural mode for public/demo surfaces:
+  it suppresses table/cascade promotion, reduces interior chrome rules, keeps
+  command paddles physical but calmer, and preserves LCARS negative space.
+- Extended `docked_surface` composition so the black content bay becomes a tall
+  framed terminal field with stronger top/bottom segment runs and visible
+  left/right brackets instead of a shallow decorative footer.
+- Tightened the `docked_surface` command-bank/content-bay composition by
+  removing the standalone ACK/status chip, docking the bay edge close to the
+  command-bank frame, and adding a slim segmented bank-to-bay rail.
+- Renamed the current low-noise fixture/profile to `docked_surface`, kept
+  `sleek_console` as a legacy alias only, reduced the top-dock reservation, and
+  removed detached content-bay/right-post fragments that made the LCARS surface
+  read as loose decoration.
+- Added the first native LCARS spatial placement model slice: parsed
+  placement/origin/dock aliases, orientation, and reserve-vs-overlay intent,
+  routed terminal reservation through that model, and added regression coverage
+  proving a docking move preserves semantic action content.
+- Added the first native semantic block-composition slice: `block_composition`
+  mode extracts labelled data boxes and a graphics viewport from semantic nodes
+  so agents can build useful LCARS interfaces from reusable blocks instead of
+  relying on another fixed dashboard profile.
+- Refined native block-composition chrome toward the tactical systems LCARS
+  grammar: one enclosing chassis, a numbered function column, carved data bays,
+  a larger graphics viewport, and horizontal ruler/tick affordances.
+- Added first native block-composition reflow beyond top docking: the same
+  semantic document can render as a side rail or bottom strip, with wider
+  reservation, preserved action slots, and regression coverage.
+- Turned LCARS rail/title regions into surface-control hitboxes that open the
+  native LCARS surface menu and saved-interface loader, establishing the rail as
+  a future project-interface switcher rather than inert decoration.
+- Added the first native LCARS mouse-focus slice: command paddles now change
+  physical state on hover, and full LCARS surfaces have low-priority control
+  hitboxes plus a subtle bracket shell for future move/resize/dock controls.
+- Added first native multi-surface LCARS rendering: the GUI snapshots all
+  active interface documents, merges their reserved terminal space, and paints
+  left/right/top/bottom docked surfaces in one window.
+- Made native LCARS surface controls target-aware: each surface hitbox carries
+  its interface id into the surface menu, so manual hide/show/dock/overlay
+  mutations affect the clicked surface in a multi-surface window.
+- Added native scope-interface tab-title behavior: applied/loaded
+  project/session LCARS documents can set `tab_title`, or fall back to a short
+  final segment from the scope id when no explicit tab title is supplied.
+- Added opt-in native OWT LCARS window chrome for the custom titlebar path:
+  a top-left OWT roundel, LCARS-styled tab slabs, a reserved left command rail,
+  and chrome hitboxes that open the existing surface menu while preserving
+  native Windows resize borders.
+- Added an all-native OWT LCARS visual grammar pass inspired by TheLCARS.com:
+  wider structural rails, carved black bay geometry, stronger segmented bar
+  rhythm, denser data-cascade texture, and OWT-owned palette roles without
+  vendoring template CSS, fonts, or audio.
+- Replaced the terminal-owned LCARS surface menu text overlay with a native
+  radial/pie surface menu built from OWT geometric/path primitives, with the
+  saved-interface loader and layout actions still backed by native OWT runtime
+  mutations and no generated raster cap assets in the menu/chrome path.
+- Refined the native LCARS window frame after visual review: shortened the tab
+  band, narrowed the left reservation, replaced tall unlabeled side slabs with
+  compact labelled `LOAD`/`DOCK`/`MOVE`/`HIDE` controls and tick segments, and
+  verified the roundel opens the native radial menu from the installed
+  `OWT.exe`.
+- Replaced the radial LCARS surface menu with an anchored elbow/slab menu that
+  reads as part of the OWT window frame: connected header and exit slabs,
+  vertical command bank, framed status bay, rectangular hit testing, and a
+  denser segmented left rail for routine off-screen Xpra visual review.
+- Added the first LCARSMarkdown scrollback renderer slice: native OWT can
+  recognize an opt-in Markdown sentinel, infer section/task/source/finding/code
+  and table markers from visible Markdown, and paint them through the same
+  transcript gutter chrome used by explicit OWT 1701 markers.
+- Added LCARSMarkdown control-comment suppression so recognized sentinel and
+  hint rows can be hidden visually after scanning without mutating scrollback.
+- Added the first sandboxed LCARS DataView path: native OWT can assemble
+  chunked OSC 1701 `owt.dataview.*` payloads from cat-able `.lcars` files and
+  open a transient table overlay with local search, sort, and paging, without
+  MCP/native-endpoint authority or trusted interface action registration.
+- Added first-pass OWT 1701 Marker parsing, terminal-state storage, and native
+  transcript chrome so Codex-style scrolling output can carry small LCARS
+  annotations without replacing the native endpoint interface lifecycle.
+- Fixed a native LCARS side-rail resize crash by refusing undersized
+  block-composition rail reservations and replacing narrow-width `f32::clamp`
+  calls with safe available-space clamps.
+- Added the private `thelcars_control_panel` native profile for exclusive demo
+  use: top sweep/header, dense navigation rail, central system bays, chart
+  strip, and action control stack without vendoring TheLCARS.com assets.
+- Refined the private TheLCARS demo window frame so OWT's native chrome carries
+  the LCARS identity: custom OWT roundel, tab masthead, integrated title
+  controls, and a geometry-only left window rail that avoids terminal text
+  rendering in the decoration paint pass.
+- Reoriented the daily shell composition around legibility: added
+  `lcars_shell` / `daily_shell` profile aliases, larger command paddles, fewer
+  structural signal rows, slab-style tabs, and a wider geometry-only sidebar
+  rail made from larger LCARS blocks instead of dense barcode ticks.
+- Tightened the LCARS native title-button path so minimize, maximize/restore,
+  and close render as OWT-owned amber, blue, and red capsules, reserve their
+  own right-side tab-mast space, and keep native Windows resize semantics.
+- Extended the private TheLCARS pass so local template CSS metrics can surface
+  as native semantic metadata: the panel now renders an included-theme strip
+  and metric-backed palette/frame/bar cues while keeping HTML/CSS/JS/audio/font
+  payloads out of the binary.
+- Upgraded the private TheLCARS showcase renderer so live-builder semantic
+  nodes feed connected navigation rails, signal bays, command-stack geometry,
+  and metadata-driven builder highlight outlines instead of loose demo blocks.
+- Added a subtle LCARS-native depth pass for the TheLCARS showcase: shared
+  raised/recessed slab helpers, command-button pressed/hover depth, carved bay
+  lips, and builder-highlight glow without adopting generic glossy UI effects.
+- Added a native TheLCARS cockpit redistribution pass: movable top, side,
+  bottom, and overlay anchors now share a renderer-internal layout grid that
+  preserves semantic content while redistributing rails, bays, command stacks,
+  and workspace framing without copying TheLCARS.com assets or layouts.
+- Fixed the native LCARS surface menu move actions so manual docking emits the
+  same normalized visible layout intent used by bridge patches, including
+  layout/placement/reservation fields and restore-from-hidden state.
 - Refreshed installed Windows shortcut metadata so pinned/start shortcuts point
   at native `OWT.exe` with the OWT icon.
+- Added native request-queue inspection for audited refresh and permissioned
+  action-execution intents through `list_action_requests`, keeping external
+  execution explicit and outside the terminal runtime.
+- Extended refresh request audit records with selected action label, kind,
+  target, and command metadata so outside runners can apply the same allowlist
+  model without native OWT launching commands.
+- Added the first terminal-owned approval state for external action/refresh
+  requests, including native GUI allow/deny controls and runner-side refusal of
+  non-approved requests.
+- Added native renderer intent detection for `open` actions with file/path
+  targets so allowlisted LCARS folder buttons grant execution intent from the
+  click itself while leaving actual folder opening to an external policy runner.
+- Added the minimal native `action_strip` renderer profile for simple folder
+  open buttons, avoiding the full LCARS surface-control/menu treatment when a
+  compact operator button strip is enough.
+- Added native live interface-builder operations and MCP bridge helpers so
+  agents can start, add, patch, move, remove, clear, and highlight LCARS nodes
+  step by step with selectable feedback modes.
+- Reworked the native LCARS Surface Control into a compact rail-attached
+  two-bank command menu with rectangular hit targets, and slimmed the
+  geometry-only left window rail into a regularized segment stack.
+- Added minimal-window guards so native LCARS surfaces and custom LCARS window
+  chrome disable below the safe viewport threshold instead of forcing oversized
+  geometry through the renderer during aggressive resize.
+- Refined the native LCARS window rail for prompt legibility by narrowing the
+  colored slab stack, preserving a stronger black gutter, and adding clearance
+  below the tab band.
+- Moved persistent LCARS one-button surfaces back to semantic native placement:
+  generated buttons no longer carry client-side coordinates, native projection
+  normalizes unopted overlays into reserved terminal space, and explicit
+  terminal overlays remain available for OWT-owned drag/resize geometry.
+- Reduced the reserved top-space estimate and live pixel reservation for compact
+  one-button LCARS surfaces so maximized shells keep their usable viewport.
+- Added native scene reflow for same-edge LCARS conflicts: latest-applied scope
+  surfaces keep their reserved edge, while compact auxiliary one-button
+  controls move to a free edge such as the bottom strip.
+- Added action paging for native LCARS action banks and a permissioned
+  `execute_action_request` endpoint so HTTP/MCP callers must dispatch intent,
+  wait for terminal approval, and then execute by request id with confirmation.
+- Added native semantic resource/folder view support through the bridge so
+  folder surfaces are OWT-owned `InterfaceDocument`s with reflow/action paging
+  instead of prototype pane coordinates.
+- Added profile-local LCARS layout overrides so manual OWT-side moves persist
+  across restart and reapply to the same interface id/scope without modifying
+  project-shipped default `LCARS.md` or native JSON documents.
+- Fixed native LCARS action-strip side placement so left/right rail moves
+  render action buttons as a vertical stack rather than a horizontal strip over
+  terminal text.
+- Tightened native LCARS compact-surface reservation so bottom single buttons
+  reserve only button-sized vertical space and left/right action strips reserve
+  content-sized rail width instead of generic full-panel space.
+- Added a staged-install manifest for Windows builds: `OWT.next.exe` is paired
+  with `OWT.next.json`, and `--no-build` promotes the verified staged artifact
+  after OWT exits.
 - Documented the build recipe, artifact policy, and next branding/runtime steps.

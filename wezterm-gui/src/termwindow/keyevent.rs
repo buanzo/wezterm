@@ -628,6 +628,10 @@ impl super::TermWindow {
 
         let modifiers = window_key.modifiers;
 
+        if window_key.key_is_down && self.handle_owt_lcars_surface_menu_key(&window_key, context) {
+            return;
+        }
+
         if self.process_key(
             &pane,
             context,

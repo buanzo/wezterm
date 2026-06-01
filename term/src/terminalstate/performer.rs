@@ -2,7 +2,9 @@ use crate::terminal::Alert;
 use crate::terminalstate::{
     default_color_map, CharSet, MouseEncoding, TabStop, UnicodeVersionStackEntry,
 };
-use crate::{ClipboardSelection, Position, TerminalState, VisibleRowIndex, DCS, ST};
+use crate::{
+    ClipboardSelection, OwtTranscriptEvent, Position, TerminalState, VisibleRowIndex, DCS, ST,
+};
 use finl_unicode::grapheme_clusters::Graphemes;
 use log::{debug, error};
 use num_traits::FromPrimitive;
@@ -760,6 +762,24 @@ impl<'a> Performer<'a> {
                         write!(&mut output, " {}", String::from_utf8_lossy(&item)).ok();
                     }
                     log::warn!("{}", output);
+                }
+            }
+            OperatingSystemCommand::OwtSemantic(event) => {
+                let transcript_event = OwtTranscriptEvent {
+                    row: self.screen().visible_row_to_stable_row(self.cursor.y),
+                    col: self.cursor.x,
+                    seqno: self.seqno,
+                    event: event.event,
+                    payload_json: event.payload_json,
+                };
+                self.owt_transcript_events.push(transcript_event.clone());
+                if self.owt_transcript_events.len() > 1024 {
+                    let remove_count = self.owt_transcript_events.len() - 1024;
+                    self.owt_transcript_events.drain(0..remove_count);
+                }
+                self.increment_seqno();
+                if let Some(handler) = self.alert_handler.as_mut() {
+                    handler.alert(Alert::OwtTranscriptEvent(transcript_event));
                 }
             }
 

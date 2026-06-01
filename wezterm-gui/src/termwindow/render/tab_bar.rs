@@ -16,6 +16,7 @@ impl crate::TermWindow {
             }
 
             self.ui_items.append(&mut self.paint_fancy_tab_bar()?);
+            self.paint_owt_lcars_window_chrome_rail(layers)?;
             return Ok(());
         }
 
@@ -105,7 +106,10 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
-        if config.use_fancy_tab_bar {
+        if config.use_fancy_tab_bar && config.owt_lcars_window_chrome {
+            let font = fontconfig.title_font()?;
+            Ok((font.metrics().cell_height.get() as f32 * 2.85).ceil())
+        } else if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
         } else {

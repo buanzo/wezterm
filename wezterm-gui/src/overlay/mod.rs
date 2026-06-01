@@ -10,6 +10,7 @@ pub mod confirm_close_pane;
 pub mod copy;
 pub mod debug;
 pub mod launcher;
+pub mod owt_dataview;
 pub mod prompt;
 pub mod quickselect;
 pub mod selector;
@@ -20,6 +21,7 @@ pub use confirm_close_pane::{
 pub use copy::{CopyModeParams, CopyOverlay};
 pub use debug::show_debug_overlay;
 pub use launcher::{launcher, LauncherArgs, LauncherFlags};
+pub use owt_dataview::{owt_dataview_overlay, LcarsDataViewDocument};
 pub use quickselect::QuickSelectOverlay;
 
 pub fn start_overlay<T, F>(

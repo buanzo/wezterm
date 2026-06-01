@@ -123,6 +123,16 @@ pub struct SemanticZone {
     pub semantic_type: SemanticType,
 }
 
+#[cfg_attr(feature = "use_serde", derive(Deserialize, Serialize))]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OwtTranscriptEvent {
+    pub row: StableRowIndex,
+    pub col: usize,
+    pub seqno: SequenceNo,
+    pub event: String,
+    pub payload_json: String,
+}
+
 pub mod color;
 
 #[cfg(test)]

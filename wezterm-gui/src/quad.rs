@@ -332,6 +332,28 @@ impl HeapQuadAllocator {
         metrics::histogram!("quad_buffer_apply", start.elapsed());
         Ok(())
     }
+
+    pub fn apply_layer_to(
+        &self,
+        source_layer: usize,
+        target_layer: usize,
+        other: &mut TripleLayerQuadAllocator,
+    ) -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
+        let quads = match source_layer {
+            0 => &self.layer0,
+            1 => &self.layer1,
+            2 => &self.layer2,
+            _ => unreachable!(),
+        };
+
+        for quad in quads {
+            other.extend_with(target_layer, &quad.to_vertices());
+        }
+
+        metrics::histogram!("quad_buffer_apply_layer", start.elapsed());
+        Ok(())
+    }
 }
 
 impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {

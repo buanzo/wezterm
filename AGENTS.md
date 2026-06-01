@@ -17,30 +17,73 @@ OWT has two active code homes:
 Do not blur those boundaries. A native `OWT.exe` that launches WSL Bash is only
 the window/shell layer unless the embedded endpoint is present. The current
 native endpoint can report status, validate/apply semantic interface state,
-paint compact or structural LCARS surfaces from the active interface, render first-pass
+paint compact or structural LCARS surfaces from active interface state, render first-pass
 semantic primitive classes, and record side-effect-free action dispatch for
 declared action ids. It also provides first local interface lifecycle calls:
 list, save, and load semantic interface documents from the OWT profile store.
 The tools-repo bridge also exposes native `apply_lcars_panel` as the current
 high-level agent path for simple semantic panels and filters native-mode MCP
 tools to the native subset. Native LCARS layout defaults to docked top-band
-mode, with reserved `right_rail` and `bottom_strip` regions now available for
-simple semantic panels; `compact_top`, `right_browser`, and `alert_strip`
-profile aliases are accepted as current static-renderer intent hints;
+mode, with reserved `left_rail`, `right_rail`, and `bottom_strip` regions now
+available for simple semantic panels; `compact_top`, `left_browser`,
+`right_browser`, and `alert_strip` profile aliases are accepted as current
+static-renderer intent hints;
 `structural_console` is the first top+left LCARS frame profile, reserving left
 rail space and treating the terminal as a content bay under native chrome;
+`docked_surface` is the current low-noise public/default docked LCARS
+composition profile, with `sleek_console` retained only as a legacy alias;
+`thelcars_control_panel` is the private, non-distributed TheLCARS.com demo
+profile with a dedicated native control-panel composition renderer;
 explicit overlay mode is reserved for HUD-style panels.
 Button-node hitboxes and `Ctrl+Alt+Shift+1..9` action-slot keyboard fallback
-are wired to the native dispatch path. The current renderer shares LCARS
+are wired to the native dispatch path. Native validation responses should expose
+soft `validation_warnings` for actionable buttons not covered by those automatic
+slots or by explicit shortcut metadata, and for external/shell-capable actions
+that lack a root action allowlist entry. The current renderer shares LCARS
 marker/button primitives across top/right/bottom surfaces, keeps marker chrome
 out from under text, recognizes first-class `frame`, `side_rail`, `bar_run`,
 `content_bay`, `data_cascade`, `table`, and `command_grid` primitives, can draw
-a structural-console table bay with headers, severity lanes, row/column
-overflow, and stable weighted geometry beyond four columns, promotes table or
-information-shape profiles such as `fleet_matrix` into the structural path when
+a tactical-systems-style `block_composition` surface from labelled data boxes,
+a function column, a graphics viewport, ruler/tick affordances, and local
+command controls, can reflow that same block-composition document into top,
+side-rail, or bottom-strip placement without replacing its semantic nodes, and
+can expose LCARS rail/title hitboxes as surface-control affordances for loading
+or docking saved interfaces. Surface-control hitboxes also support first-pass
+direct drag-release docking to left/right/top/bottom or a center free/undocked
+overlay with recorded floating geometry; floating overlays also have a
+lower-right resize hitbox that patches persisted floating width/height. It can
+also paint more than one active docked
+surface at once by merging each surface's terminal reservation, and surface
+control hitboxes carry their interface id so menu-driven layout mutations target
+the clicked surface. It can also draw a structural-console table bay with headers,
+severity lanes, row/column overflow, and stable weighted geometry beyond four
+columns, promotes table or
+information-shape profiles such as `fleet_matrix`, `incident_summary`,
+`queue_triage`, `project_status`, and `artifact_browser` into the structural path when
 no explicit side/bottom layout overrides them, uses a first layout planner to
 choose inline or stacked table/data detail bays and show explicit signal/action
-overflow counters when geometry is tight, wraps long structural signal rows
+overflow counters when geometry is tight, renders compact metric/table
+provenance labels from first-class `UiNode.provenance` with legacy property
+fallbacks, extracts first table row grouping/sort/focus/drilldown metadata,
+maps visible child-row action ids to native hitboxes that update table focus
+metadata through side-effect-free dispatch, supports `Ctrl+Alt+Shift` plus
+Up/Down/Left/Right/PageUp/PageDown for keyboard table focus movement and
+row-group jumps without external execution while persisting `focused_group`,
+supports `Ctrl+Alt+Shift+Space` for focused-group mode with previous
+focus-mode metadata preserved for restore,
+supports `Ctrl+Alt+Shift+Enter` for safe focused-row action dispatch, renders
+compact group-boundary summaries
+for row/drill/focus/provenance/severity state, honors explicit `focused_group`
+metadata in those summaries, can enrich those summaries from explicit
+`role=cohort_summary` / `role=cohort` nodes targeting the table, renders first compact per-cell
+severity/provenance markers from child row `cell_severity`/`cell_provenance`
+metadata, projects focused structural table rows into a compact `ROW DETAIL`
+readout with group/state/drilldown/provenance/cell-mark context,
+supports an opt-in focused-cell `CELL FOCUS` readout and highlight through
+`focused_column`/`focused_cell` style table properties plus
+`Ctrl+Alt+Shift+<`/`>` and `Home/End` focused-column navigation and first
+cell mouse hitboxes,
+wraps long structural signal rows
 within their reserved row budget instead of letting them run into adjacent
 LCARS regions, gives structural chrome-marker labels black backing so rails do
 not cut through text, suppresses the structural command bay when no actions are
@@ -50,12 +93,48 @@ do not steal narrow-window content space and wide windows give more width to
 table/detail bays,
 uses harder console bars/command paddles instead of generic rounded desktop
 pills, and shows active `ACK` feedback for the most recently dispatched action.
-The native endpoint also has the first granular
-semantic build operation, `update_node`, which adds or replaces one node against
-the active interface and can bind one action in the same transaction; external
-action execution, pane control, arbitrary
-import/export packages, and full scene-graph native UI layouts are not native
-yet.
+The native endpoint also has the first live-builder surface: `edit_interface`
+applies ordered add/replace/patch/remove/move/clear/bind/highlight operations
+against the active interface, and the tools bridge exposes granular helpers for
+step-by-step visual reconstruction with selectable feedback modes. `update_node`
+remains the older single-node add/replace path and can bind one action in the
+same transaction, plus `bind_action` for attaching a declared action to an
+existing semantic node,
+`patch_interface_layout` for dock/origin/orientation/reservation/visibility
+changes without replacing semantic nodes/actions, `request_refresh` for
+auditable refresh intent, `dispatch_action` external-execution intent recording
+with explicit permission/confirmation flags for HTTP/MCP callers, renderer-owned
+click dispatch for native local `open` actions, and structured `run.argv` actions
+that native OWT may fork only when a root action allowlist entry matches,
+`diff_interface` for semantic snapshot comparison,
+and `patch_interface_lifecycle` for pin/hide/restore/expire metadata without
+retiring the interface, including rendered `LIFECYCLE` badge projection for
+visible pin/TTL state and `FRESHNESS` badge projection for stale
+collected-at/refresh-interval metadata, plus `replace_interface` for swapping an active surface
+to an inline or saved replacement document while preserving lifecycle state, and
+inline inert `export_interface`/`import_interface` package JSON without
+implicit execution. Validate/apply/load/import/replace and layout
+preview/patch responses report `render_projection` so agents can see the
+actual renderer path, structural profile, normalized placement, reservation
+intent, and recorded spatial hints (`anchor`, `z_order`, `priority`,
+`min_terminal_cells`, `collapse_policy`) plus floating overlay geometry and
+information-shape contract metadata (`profile_family`, `table_density`,
+cohort/state/severity keys, lifecycle controls, action roles, refresh policy,
+drilldown policy, and non-default `palette_profile`) before a screenshot. Layout previews
+also expose first-pass same-edge reservation conflict hints; `owt_status`
+reports the same projection per interface; external action execution, pane control, archive pack file
+I/O, automated screenshot capture, and full scene-graph native UI layouts are
+not native yet.
+When applying or loading a project/session LCARS interface, native OWT sets the
+active tab title from explicit `tab_title`, then root `properties.tab_title`,
+then a short final-segment fallback derived from the scope id. Status and
+`list_interfaces` also expose a derived `owner` object from the same semantic
+scope, so project/session/window ownership is visible without tying OWT to a
+specific agent model or conversation id. The native LCARS surface menu should
+reuse that owner metadata for target status, saved-profile grouping, and
+saved-profile owner filtering rather than creating a separate ownership model.
+Use `tab_title: "preserve"` for
+interfaces that must not change the tab title.
 
 ## Working Branches
 
@@ -165,7 +244,8 @@ Use `OWT_NATIVE_MCP.md` as the native-control-plane direction.
 
 The `owt-control/` crate is the first native-runtime scaffold. It should remain
 side-effect free: protocol types, interface document types, validation, runtime
-state, and tool-name constants only. GUI wiring, transport listeners, file I/O,
+state, tool-name constants, and CLI helpers such as `owt-validate-interface`
+only. GUI wiring, transport listeners, file I/O,
 and agent/MCP startup loops belong in later integration layers so endpoint
 startup stays deterministic.
 
@@ -174,21 +254,40 @@ a Windows-loopback HTTP endpoint, generates a per-process token, exports
 `OWT_NATIVE_*` values before Lua config loads, and lets the portable Windows
 config pass them into WSL. It currently supports status, semantic interface
 validation/application state, side-effect-free declared action dispatch, and
-local list/save/load for interface documents in the OWT profile store.
-`wezterm-gui/src/termwindow/render/owt_lcars.rs` renders the first compact or
-structural LCARS surface for the active interface, registers button-node
-hitboxes, and the status response reports `native_render_passes` so agents can
-verify the native paint path ran. The renderer now has shared marker/button
+local list/save/load for interface documents in the OWT profile store. Keep
+semantic validation hostile to accidental disclosure: obvious
+credential-sensitive visible text or property metadata must be rejected before
+an interface reaches native runtime state. Missing keyboard fallback coverage is
+a warning, not a hard rejection, until the renderer exposes complete explicit
+action-slot control.
+`wezterm-gui/src/termwindow/render/owt_lcars.rs` renders compact or
+structural LCARS surfaces for active interface documents, registers button-node
+hitboxes, merges reservations across multiple active docked surfaces, and the
+status response reports `native_render_passes` so agents can verify the native
+paint path ran. The renderer now has shared marker/button
 primitives, structural frame/content-bay primitives, first structural-console
 layout planning, table/information-shape structural promotion, row/column
-overflow reporting, and active dispatch feedback, but it is still an early
+overflow reporting, render_projection projection of profile contract metadata,
+and active dispatch feedback, but it is still an early
 native scene slice. Structural signal text now has bounded word wrapping plus
 ellipsis overflow for the current top/left structural console path. The
 planner now has a first viewport-breakpoint slice: compact widths keep the
 command bank single-column and capped, while regular/wide widths allow larger
 command/detail bays and two-column command banks when action count and space
 justify it. Full layout fit scoring, focus/drilldown navigation, and richer
-table/cohort semantics remain pending.
+table/cohort semantics remain pending. `patch_interface_layout` is the first
+native mutation path for moving, reserving, hiding, and showing/restoring a
+surface while keeping the terminal-owned semantic document intact.
+Secondary-click on a tab title opens the first terminal-owned LCARS surface
+menu; those manual actions are backed by the same native layout patch path
+rather than by an OS context menu or a regenerated fixture. That menu also
+lists saved LCARS documents from the local OWT profile store and can load one
+directly into the visible native runtime. When opened from LCARS chrome instead
+of the tab title, the menu targets that clicked interface id; dock placement
+must remain geometry-only and must not assign application roles by side. The
+native LCARS window chrome path owns the OWT roundel, tab masthead, integrated
+title controls, and left rail; keep the decoration rail geometry-only in that
+paint phase rather than calling the terminal text renderer from chrome code.
 Keep the listener on loopback; the tools-repo bridge can use Windows interop
 when WSL cannot reach Windows loopback directly. Do not expand this endpoint
 into pane mutation, external action execution, arbitrary import/export

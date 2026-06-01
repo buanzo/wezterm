@@ -347,6 +347,31 @@ fn test_semantic_1539() {
 }
 
 #[test]
+fn test_owt_transcript_semantic_event() {
+    use termwiz::escape::osc::OwtSemanticEvent;
+
+    let mut term = TestTerm::new(5, 10, 0);
+    term.print("heading");
+    term.print(format!(
+        "{}",
+        OperatingSystemCommand::OwtSemantic(OwtSemanticEvent {
+            event: "owt.section".to_string(),
+            payload_json: r#"{"version":1,"id":"heading","kind":"section"}"#.to_string(),
+        })
+    ));
+
+    let events = term.owt_transcript_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].row, 0);
+    assert_eq!(events[0].col, 7);
+    assert_eq!(events[0].event, "owt.section");
+    assert_eq!(
+        events[0].payload_json,
+        r#"{"version":1,"id":"heading","kind":"section"}"#
+    );
+}
+
+#[test]
 fn test_semantic() {
     use termwiz::escape::osc::FinalTermSemanticPrompt;
     let mut term = TestTerm::new(5, 10, 0);

@@ -1,3 +1,4 @@
+use crate::overlay::owt_dataview::{validate_dataview_document, LcarsDataViewDocument};
 use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
@@ -14,11 +15,16 @@ use mux::pane::{PaneId, WithPaneLines};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::PositionedPane;
 use ordered_float::NotNan;
+use std::ops::Range;
 use std::time::Instant;
+use termwiz::cell::Intensity;
+use termwiz::color::{ColorSpec, RgbColor};
 use wezterm_dynamic::Value;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
-use wezterm_term::{Line, StableRowIndex};
+use wezterm_term::{CellAttributes, Line, OwtTranscriptEvent, StableRowIndex};
 use window::color::LinearRgba;
+
+const LCARS_MARKDOWN_LOOKBACK_ROWS: StableRowIndex = 512;
 
 impl crate::TermWindow {
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
@@ -302,12 +308,16 @@ impl crate::TermWindow {
         let cursor_is_default_color =
             palette.cursor_fg == global_cursor_fg && palette.cursor_bg == global_cursor_bg;
 
-        {
-            let stable_range = match current_viewport {
-                Some(top) => top..top + dims.viewport_rows as StableRowIndex,
-                None => dims.physical_top..dims.physical_top + dims.viewport_rows as StableRowIndex,
-            };
+        let stable_range = match current_viewport {
+            Some(top) => top..top + dims.viewport_rows as StableRowIndex,
+            None => dims.physical_top..dims.physical_top + dims.viewport_rows as StableRowIndex,
+        };
 
+        let left_pixel_x = padding_left
+            + border.left.get() as f32
+            + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
+
+        {
             pos.pane
                 .apply_hyperlinks(stable_range.clone(), &self.config.hyperlink_rules);
 
@@ -336,10 +346,6 @@ impl crate::TermWindow {
                 layers: &'a mut TripleLayerQuadAllocator<'b>,
                 error: Option<anyhow::Error>,
             }
-
-            let left_pixel_x = padding_left
-                + border.left.get() as f32
-                + (pos.left as f32 * self.render_metrics.cell_size.width as f32);
 
             let mut render = LineRender {
                 term_window: self,
@@ -572,6 +578,26 @@ impl crate::TermWindow {
             }
         }
 
+        let markdown_scan_start = stable_range
+            .start
+            .saturating_sub(LCARS_MARKDOWN_LOOKBACK_ROWS);
+        let markdown_scan_lines =
+            collect_lcars_markdown_lines(pos, markdown_scan_start..stable_range.end);
+        self.paint_lcars_markdown_annotations(
+            pos,
+            layers,
+            stable_range.clone(),
+            left_pixel_x,
+            top_pixel_y,
+            dims.cols,
+            palette
+                .background
+                .to_linear()
+                .mul_alpha(config.window_background_opacity),
+            &markdown_scan_lines,
+        )?;
+        self.paint_owt_transcript_markers(pos, layers, stable_range, left_pixel_x, top_pixel_y)?;
+
         /*
         if let Some(zone) = zone {
             // TODO: render a thingy to jump to prior prompt
@@ -579,6 +605,342 @@ impl crate::TermWindow {
         */
         metrics::histogram!("paint_pane.lines", start.elapsed());
         log::trace!("lines elapsed {:?}", start.elapsed());
+
+        Ok(())
+    }
+
+    fn paint_owt_transcript_markers(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        stable_range: Range<StableRowIndex>,
+        left_pixel_x: f32,
+        top_pixel_y: f32,
+    ) -> anyhow::Result<()> {
+        let events = pos.pane.copy_owt_transcript_events();
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let markers = events.iter().filter_map(|event| {
+            OwtTranscriptMarkerVisual::for_event(event).map(|visual| (event.row, visual))
+        });
+        self.paint_owt_marker_chrome(
+            pos,
+            layers,
+            stable_range,
+            left_pixel_x,
+            top_pixel_y,
+            markers,
+        )
+    }
+
+    fn paint_lcars_markdown_annotations(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        stable_range: Range<StableRowIndex>,
+        left_pixel_x: f32,
+        top_pixel_y: f32,
+        pane_cols: usize,
+        background: LinearRgba,
+        scan_lines: &[LcarsMarkdownLine],
+    ) -> anyhow::Result<()> {
+        let scan = LcarsMarkdownScanner::scan(scan_lines, stable_range.clone());
+        self.paint_lcars_markdown_suppressed_rows(
+            pos,
+            layers,
+            stable_range.clone(),
+            left_pixel_x,
+            top_pixel_y,
+            pane_cols,
+            background,
+            scan.suppressed_rows.iter().copied(),
+        )?;
+        self.paint_lcars_markdown_dataview_blocks(
+            pos,
+            layers,
+            stable_range.clone(),
+            left_pixel_x,
+            top_pixel_y,
+            pane_cols,
+            &scan.dataview_blocks,
+        )?;
+
+        let markers = scan.markers.into_iter().map(|marker| {
+            (
+                marker.stable_row,
+                OwtTranscriptMarkerVisual::for_lcars_markdown(marker.kind),
+            )
+        });
+        self.paint_owt_marker_chrome(
+            pos,
+            layers,
+            stable_range,
+            left_pixel_x,
+            top_pixel_y,
+            markers,
+        )
+    }
+
+    fn paint_lcars_markdown_suppressed_rows(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        stable_range: Range<StableRowIndex>,
+        left_pixel_x: f32,
+        top_pixel_y: f32,
+        pane_cols: usize,
+        background: LinearRgba,
+        rows: impl IntoIterator<Item = StableRowIndex>,
+    ) -> anyhow::Result<()> {
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let width = pane_cols as f32 * cell_width;
+
+        for stable_row in rows {
+            if stable_row < stable_range.start || stable_row >= stable_range.end {
+                continue;
+            }
+
+            let row_index = (stable_row - stable_range.start) as usize;
+            let y = top_pixel_y + (row_index + pos.top) as f32 * cell_height;
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(left_pixel_x, y, width, cell_height),
+                background,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn paint_lcars_markdown_dataview_blocks(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        stable_range: Range<StableRowIndex>,
+        left_pixel_x: f32,
+        top_pixel_y: f32,
+        pane_cols: usize,
+        blocks: &[LcarsMarkdownDataViewBlock],
+    ) -> anyhow::Result<()> {
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+
+        for block in blocks {
+            if block.start_row < stable_range.start || block.start_row >= stable_range.end {
+                continue;
+            }
+
+            let block_rows = (block.end_row - block.start_row + 1).max(1) as usize;
+            let Some(layout) = lcars_markdown_dataview_layout(block, pane_cols, block_rows) else {
+                continue;
+            };
+
+            let row_index = (block.start_row - stable_range.start) as usize;
+            let x = left_pixel_x;
+            let y = top_pixel_y + (row_index + pos.top) as f32 * cell_height;
+            let height = layout.visible_rows as f32 * cell_height;
+            let bay_width = layout.bay_cols as f32 * cell_width;
+            let rail_width = layout.rail_cols as f32 * cell_width;
+            let accent = owt_marker_color(255, 156, 0, 0.88);
+            let secondary = owt_marker_color(102, 153, 204, 0.78);
+            let violet = owt_marker_color(204, 153, 255, 0.68);
+            let black = owt_marker_color(0, 0, 0, 0.96);
+
+            self.filled_rectangle(layers, 2, euclid::rect(x, y, bay_width, height), black)?;
+            self.filled_rectangle(layers, 2, euclid::rect(x, y, rail_width, height), accent)?;
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(x + rail_width + 2.0, y, bay_width - rail_width - 2.0, 4.0),
+                accent,
+            )?;
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(
+                    x + rail_width + 2.0,
+                    y + cell_height * 1.82,
+                    bay_width - rail_width - 2.0,
+                    3.0,
+                ),
+                secondary,
+            )?;
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(
+                    x + rail_width + 2.0,
+                    y + height - 4.0,
+                    bay_width * 0.48,
+                    4.0,
+                ),
+                violet,
+            )?;
+
+            let text_x = x + (layout.rail_cols + 1) as f32 * cell_width;
+            let mut lines = block.dataview_lines(layout.text_cols, layout.visible_rows);
+            for (offset, line) in lines.drain(..).enumerate() {
+                let row_y = y + (offset as f32 * cell_height);
+                self.paint_lcars_markdown_text(
+                    layers,
+                    text_x,
+                    row_y,
+                    layout.text_cols,
+                    &line.text,
+                    line.fg,
+                    line.bold,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn paint_lcars_markdown_text(
+        &mut self,
+        layers: &mut TripleLayerQuadAllocator,
+        x: f32,
+        y: f32,
+        max_cols: usize,
+        text: &str,
+        fg: RgbColor,
+        bold: bool,
+    ) -> anyhow::Result<()> {
+        if max_cols == 0 {
+            return Ok(());
+        }
+
+        let mut attrs = CellAttributes::blank();
+        attrs.set_foreground(ColorSpec::TrueColor(fg.to_tuple_rgba()));
+        if bold {
+            attrs.set_intensity(Intensity::Bold);
+        }
+        let text = fit_lcars_markdown_text(text, max_cols);
+        let line = Line::from_text(&text, &attrs, 0, None);
+        let palette = self.palette().clone();
+        let gl_state = self.render_state.as_ref().unwrap();
+        let white_space = gl_state.util_sprites.white_space.texture_coords();
+        let filled_box = gl_state.util_sprites.filled_box.texture_coords();
+        let dims = RenderableDimensions {
+            cols: max_cols,
+            physical_top: 0,
+            scrollback_rows: 0,
+            scrollback_top: 0,
+            viewport_rows: 1,
+            dpi: self.terminal_size.dpi,
+            pixel_height: self.render_metrics.cell_size.height as usize,
+            pixel_width: (max_cols as f32 * self.render_metrics.cell_size.width as f32) as usize,
+            reverse_video: false,
+        };
+        let cursor = StableCursorPosition::default();
+        let mut text_layers = HeapQuadAllocator::default();
+
+        self.render_screen_line(
+            RenderScreenLineParams {
+                top_pixel_y: y,
+                left_pixel_x: x,
+                pixel_width: max_cols as f32 * self.render_metrics.cell_size.width as f32,
+                stable_line_idx: None,
+                line: &line,
+                selection: 0..0,
+                cursor: &cursor,
+                palette: &palette,
+                dims: &dims,
+                config: &self.config,
+                pane: None,
+                white_space,
+                filled_box,
+                cursor_border_color: LinearRgba::TRANSPARENT,
+                foreground: fg.to_linear_tuple_rgba(),
+                is_active: true,
+                selection_fg: LinearRgba::TRANSPARENT,
+                selection_bg: LinearRgba::TRANSPARENT,
+                cursor_fg: LinearRgba::TRANSPARENT,
+                cursor_bg: LinearRgba::TRANSPARENT,
+                cursor_is_default_color: true,
+                window_is_transparent: false,
+                default_bg: LinearRgba::TRANSPARENT,
+                font: None,
+                style: None,
+                use_pixel_positioning: self.config.experimental_pixel_positioning,
+                render_metrics: self.render_metrics,
+                shape_key: None,
+                password_input: false,
+            },
+            &mut TripleLayerQuadAllocator::Heap(&mut text_layers),
+        )?;
+
+        text_layers.apply_layer_to(1, 2, layers)?;
+
+        Ok(())
+    }
+
+    fn paint_owt_marker_chrome(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        stable_range: Range<StableRowIndex>,
+        left_pixel_x: f32,
+        top_pixel_y: f32,
+        markers: impl IntoIterator<Item = (StableRowIndex, OwtTranscriptMarkerVisual)>,
+    ) -> anyhow::Result<()> {
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let gutter_width = (cell_width * 0.36).max(4.0);
+        if left_pixel_x < gutter_width + 2.0 {
+            return Ok(());
+        }
+        let gutter_x = left_pixel_x - gutter_width - 2.0;
+
+        for (stable_row, visual) in markers {
+            if stable_row < stable_range.start || stable_row >= stable_range.end {
+                continue;
+            }
+
+            let row_index = (stable_row - stable_range.start) as usize;
+            let y = top_pixel_y + (row_index + pos.top) as f32 * cell_height;
+            let marker_y = y + (cell_height * 0.18);
+            let marker_h = (cell_height * 0.64).max(4.0);
+
+            self.filled_rectangle(
+                layers,
+                2,
+                euclid::rect(gutter_x, marker_y, gutter_width, marker_h),
+                visual.primary,
+            )?;
+
+            if visual.section_rule {
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(gutter_x, y + cell_height - 3.0, gutter_width, 2.0),
+                    visual.secondary,
+                )?;
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(gutter_x, y + 2.0, gutter_width, 3.0),
+                    visual.secondary,
+                )?;
+            } else if visual.strong {
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(gutter_x, marker_y, gutter_width, 3.0),
+                    visual.secondary,
+                )?;
+                self.filled_rectangle(
+                    layers,
+                    2,
+                    euclid::rect(gutter_x, marker_y + marker_h - 3.0, gutter_width, 3.0),
+                    visual.secondary,
+                )?;
+            }
+        }
 
         Ok(())
     }
@@ -686,5 +1048,1018 @@ impl crate::TermWindow {
             baseline: 1.0,
             content: ComputedElementContent::Children(vec![]),
         })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LcarsMarkdownLine {
+    stable_row: StableRowIndex,
+    text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LcarsMarkdownMarker {
+    stable_row: StableRowIndex,
+    kind: LcarsMarkdownKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct LcarsMarkdownScan {
+    markers: Vec<LcarsMarkdownMarker>,
+    suppressed_rows: Vec<StableRowIndex>,
+    dataview_blocks: Vec<LcarsMarkdownDataViewBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LcarsMarkdownDataViewBlock {
+    start_row: StableRowIndex,
+    end_row: StableRowIndex,
+    document: LcarsDataViewDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LcarsMarkdownDataViewCandidate {
+    start_row: StableRowIndex,
+    rows: Vec<StableRowIndex>,
+    json_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LcarsMarkdownRenderedLine {
+    text: String,
+    fg: RgbColor,
+    bold: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LcarsMarkdownDataViewLayout {
+    bay_cols: usize,
+    rail_cols: usize,
+    text_cols: usize,
+    visible_rows: usize,
+}
+
+impl LcarsMarkdownDataViewBlock {
+    fn preferred_text_cols(&self, max_cols: usize) -> usize {
+        let mut width = 0;
+        for line in self.dataview_lines(max_cols, 4) {
+            width = width.max(line.text.chars().count());
+        }
+        width.min(max_cols)
+    }
+
+    fn dataview_lines(
+        &self,
+        max_cols: usize,
+        available_rows: usize,
+    ) -> Vec<LcarsMarkdownRenderedLine> {
+        if available_rows == 0 {
+            return vec![];
+        }
+
+        let mut lines = Vec::new();
+        lines.push(LcarsMarkdownRenderedLine {
+            text: format!(
+                "LCARS DATAVIEW  {}  ROWS {}  COLS {}",
+                self.document.title,
+                self.document.rows.len(),
+                self.document.columns.len()
+            ),
+            fg: RgbColor::new_8bpc(255, 204, 102),
+            bold: true,
+        });
+        if available_rows == 1 {
+            return lines;
+        }
+
+        lines.push(LcarsMarkdownRenderedLine {
+            text: format!("{}  / LOCAL / SAFE MARKDOWN", self.document.id),
+            fg: RgbColor::new_8bpc(153, 204, 255),
+            bold: false,
+        });
+        if available_rows == 2 {
+            return lines;
+        }
+
+        let table_rows = available_rows
+            .saturating_sub(3)
+            .min(self.document.rows.len());
+        let table_columns = self.document.columns.len().min(6);
+        let widths = dataview_column_widths(&self.document, table_columns, max_cols);
+        lines.push(LcarsMarkdownRenderedLine {
+            text: format_dataview_cells(&self.document.columns[..table_columns], &widths),
+            fg: RgbColor::new_8bpc(255, 153, 102),
+            bold: true,
+        });
+
+        for row in self.document.rows.iter().take(table_rows) {
+            let mut cells = Vec::new();
+            for index in 0..table_columns {
+                cells.push(row.get(index).map(String::as_str).unwrap_or(""));
+            }
+            lines.push(LcarsMarkdownRenderedLine {
+                text: format_dataview_cells(&cells, &widths),
+                fg: RgbColor::new_8bpc(220, 220, 220),
+                bold: false,
+            });
+        }
+
+        if self.document.rows.len() > table_rows && lines.len() < available_rows {
+            lines.push(LcarsMarkdownRenderedLine {
+                text: format!(
+                    "+{} rows hidden in inline preview",
+                    self.document.rows.len() - table_rows
+                ),
+                fg: RgbColor::new_8bpc(204, 153, 255),
+                bold: false,
+            });
+        }
+
+        lines
+    }
+}
+
+fn lcars_markdown_dataview_layout(
+    block: &LcarsMarkdownDataViewBlock,
+    pane_cols: usize,
+    block_rows: usize,
+) -> Option<LcarsMarkdownDataViewLayout> {
+    let visible_rows = block_rows.min(10);
+    if visible_rows < 3 || pane_cols < 12 {
+        return None;
+    }
+
+    let rail_cols = if pane_cols >= 24 { 2 } else { 1 };
+    let gap_cols = 2;
+    let max_text_cols = pane_cols.saturating_sub(rail_cols + gap_cols);
+    if max_text_cols < 8 {
+        return None;
+    }
+
+    let min_text_cols = 28.min(max_text_cols);
+    let preferred_text_cols = block
+        .preferred_text_cols(max_text_cols)
+        .max(min_text_cols)
+        .min(max_text_cols);
+    let bay_cols = (rail_cols + gap_cols + preferred_text_cols).min(pane_cols);
+
+    Some(LcarsMarkdownDataViewLayout {
+        bay_cols,
+        rail_cols,
+        text_cols: preferred_text_cols,
+        visible_rows,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LcarsMarkdownKind {
+    Section { level: u8 },
+    Task,
+    Finding,
+    Source,
+    Assessment,
+    Warning,
+    Error,
+    Code,
+    Divider,
+    Table,
+}
+
+struct LcarsMarkdownScanner;
+
+impl LcarsMarkdownScanner {
+    fn scan(
+        lines: &[LcarsMarkdownLine],
+        visible_range: Range<StableRowIndex>,
+    ) -> LcarsMarkdownScan {
+        let mut enabled = false;
+        let mut in_code_block = false;
+        let mut dataview_candidate: Option<LcarsMarkdownDataViewCandidate> = None;
+        let mut pending_hint = None;
+        let mut scan = LcarsMarkdownScan::default();
+
+        for line in lines {
+            let trimmed = line.text.trim();
+
+            if is_lcars_markdown_sentinel(trimmed) {
+                enabled = true;
+                if visible_range.contains(&line.stable_row) {
+                    scan.suppressed_rows.push(line.stable_row);
+                }
+                continue;
+            }
+
+            if !enabled {
+                continue;
+            }
+
+            if let Some(candidate) = dataview_candidate.as_mut() {
+                candidate.rows.push(line.stable_row);
+                if markdown_code_fence_info(trimmed).is_some() {
+                    let candidate = dataview_candidate.take().expect("candidate is set");
+                    in_code_block = false;
+                    scan.finish_dataview_candidate(candidate, &visible_range);
+                } else {
+                    candidate.json_lines.push(line.text.clone());
+                }
+                continue;
+            }
+
+            if let Some(hint) = parse_lcars_markdown_hint(trimmed) {
+                if hint.is_some() && visible_range.contains(&line.stable_row) {
+                    scan.suppressed_rows.push(line.stable_row);
+                }
+                pending_hint = hint;
+                continue;
+            }
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let mut kind = if let Some(fence_info) = markdown_code_fence_info(trimmed) {
+                let opening = !in_code_block;
+                if opening && is_lcars_dataview_fence_info(fence_info) {
+                    dataview_candidate = Some(LcarsMarkdownDataViewCandidate {
+                        start_row: line.stable_row,
+                        rows: vec![line.stable_row],
+                        json_lines: vec![],
+                    });
+                    pending_hint = None;
+                    in_code_block = true;
+                    continue;
+                }
+                in_code_block = !in_code_block;
+                Some(LcarsMarkdownKind::Code)
+            } else if in_code_block {
+                Some(LcarsMarkdownKind::Code)
+            } else {
+                classify_lcars_markdown_line(trimmed)
+            };
+
+            if let Some(hint) = pending_hint.take() {
+                kind = Some(hint);
+            }
+
+            if let Some(kind) = kind {
+                if visible_range.contains(&line.stable_row) {
+                    scan.markers.push(LcarsMarkdownMarker {
+                        stable_row: line.stable_row,
+                        kind,
+                    });
+                }
+            }
+        }
+
+        if let Some(candidate) = dataview_candidate.take() {
+            scan.mark_invalid_dataview_candidate(candidate, &visible_range);
+        }
+
+        scan
+    }
+}
+
+impl LcarsMarkdownScan {
+    fn finish_dataview_candidate(
+        &mut self,
+        candidate: LcarsMarkdownDataViewCandidate,
+        visible_range: &Range<StableRowIndex>,
+    ) {
+        let payload = candidate.json_lines.join("\n");
+        match validate_dataview_document(&payload) {
+            Ok(document) => {
+                let table_rows = self.take_adjacent_fallback_table_rows(candidate.start_row);
+                let start_row = table_rows.first().copied().unwrap_or(candidate.start_row);
+                for row in &table_rows {
+                    if visible_range.contains(row) {
+                        self.suppressed_rows.push(*row);
+                    }
+                }
+                for row in &candidate.rows {
+                    if visible_range.contains(row) {
+                        self.suppressed_rows.push(*row);
+                    }
+                }
+                let end_row = *candidate.rows.last().unwrap_or(&candidate.start_row);
+                if end_row >= visible_range.start && start_row < visible_range.end {
+                    self.dataview_blocks.push(LcarsMarkdownDataViewBlock {
+                        start_row,
+                        end_row,
+                        document,
+                    });
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "Invalid LCARSMarkdown lcars-dataview block at row {}: {err:#}",
+                    candidate.start_row
+                );
+                self.mark_invalid_dataview_candidate(candidate, visible_range);
+            }
+        }
+    }
+
+    fn take_adjacent_fallback_table_rows(
+        &mut self,
+        dataview_start_row: StableRowIndex,
+    ) -> Vec<StableRowIndex> {
+        let Some(last_marker) = self.markers.last() else {
+            return vec![];
+        };
+        if last_marker.kind != LcarsMarkdownKind::Table
+            || dataview_start_row < last_marker.stable_row
+            || dataview_start_row - last_marker.stable_row > 3
+        {
+            return vec![];
+        }
+
+        let mut table_rows = Vec::new();
+        while self
+            .markers
+            .last()
+            .is_some_and(|marker| marker.kind == LcarsMarkdownKind::Table)
+        {
+            let marker = self.markers.pop().expect("marker exists");
+            table_rows.push(marker.stable_row);
+        }
+        table_rows.reverse();
+        table_rows
+    }
+
+    fn mark_invalid_dataview_candidate(
+        &mut self,
+        candidate: LcarsMarkdownDataViewCandidate,
+        visible_range: &Range<StableRowIndex>,
+    ) {
+        for row in candidate.rows {
+            if visible_range.contains(&row) {
+                self.markers.push(LcarsMarkdownMarker {
+                    stable_row: row,
+                    kind: if row == candidate.start_row {
+                        LcarsMarkdownKind::Warning
+                    } else {
+                        LcarsMarkdownKind::Code
+                    },
+                });
+            }
+        }
+    }
+}
+
+fn collect_lcars_markdown_lines(
+    pos: &PositionedPane,
+    stable_range: Range<StableRowIndex>,
+) -> Vec<LcarsMarkdownLine> {
+    struct Collector {
+        lines: Vec<LcarsMarkdownLine>,
+    }
+
+    impl WithPaneLines for Collector {
+        fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
+            for (line_idx, line) in lines.iter().enumerate() {
+                let stable_row = stable_top + line_idx as StableRowIndex;
+                self.lines.push(LcarsMarkdownLine {
+                    stable_row,
+                    text: line.as_str().into_owned(),
+                });
+            }
+        }
+    }
+
+    let mut collector = Collector { lines: vec![] };
+    pos.pane.with_lines_mut(stable_range, &mut collector);
+    collector.lines
+}
+
+fn is_lcars_markdown_sentinel(trimmed: &str) -> bool {
+    trimmed.starts_with("<!--") && trimmed.contains("owt:lcars-md")
+}
+
+fn parse_lcars_markdown_hint(trimmed: &str) -> Option<Option<LcarsMarkdownKind>> {
+    let body = trimmed.strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+    let hint = body.strip_prefix("lcars:")?.trim();
+    let mut parts = hint.split_whitespace();
+    let name = parts.next()?.to_ascii_lowercase();
+    let severity = hint
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("severity="))
+        .map(|value| {
+            value
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_ascii_lowercase()
+        });
+
+    let kind = match name.as_str() {
+        "section" => LcarsMarkdownKind::Section { level: 2 },
+        "task" => LcarsMarkdownKind::Task,
+        "finding" => match severity.as_deref() {
+            Some("warn") | Some("warning") => LcarsMarkdownKind::Warning,
+            Some("error") | Some("err") => LcarsMarkdownKind::Error,
+            _ => LcarsMarkdownKind::Finding,
+        },
+        "source" => LcarsMarkdownKind::Source,
+        "assessment" => LcarsMarkdownKind::Assessment,
+        "warning" | "warn" => LcarsMarkdownKind::Warning,
+        "error" | "err" => LcarsMarkdownKind::Error,
+        "code" => LcarsMarkdownKind::Code,
+        "table" => LcarsMarkdownKind::Table,
+        "divider" | "rule" => LcarsMarkdownKind::Divider,
+        _ => return Some(None),
+    };
+
+    Some(Some(kind))
+}
+
+fn classify_lcars_markdown_line(trimmed: &str) -> Option<LcarsMarkdownKind> {
+    if let Some(level) = markdown_heading_level(trimmed) {
+        return Some(LcarsMarkdownKind::Section { level });
+    }
+
+    if is_markdown_task_item(trimmed) {
+        return Some(LcarsMarkdownKind::Task);
+    }
+
+    if trimmed.starts_with("> [!WARNING]") || trimmed.starts_with("> [!WARN]") {
+        return Some(LcarsMarkdownKind::Warning);
+    }
+
+    if trimmed.starts_with("> [!ERROR]") || trimmed.starts_with("> [!ERR]") {
+        return Some(LcarsMarkdownKind::Error);
+    }
+
+    if trimmed.starts_with('>') {
+        return Some(LcarsMarkdownKind::Source);
+    }
+
+    if is_markdown_rule(trimmed) {
+        return Some(LcarsMarkdownKind::Divider);
+    }
+
+    if is_markdown_table_row(trimmed) {
+        return Some(LcarsMarkdownKind::Table);
+    }
+
+    None
+}
+
+fn markdown_heading_level(trimmed: &str) -> Option<u8> {
+    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if (1..=6).contains(&level) && trimmed.chars().nth(level).is_some_and(char::is_whitespace) {
+        Some(level as u8)
+    } else {
+        None
+    }
+}
+
+fn is_markdown_task_item(trimmed: &str) -> bool {
+    let lower = trimmed.to_ascii_lowercase();
+    ["- [ ]", "- [x]", "* [ ]", "* [x]", "+ [ ]", "+ [x]"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn markdown_code_fence_info(trimmed: &str) -> Option<&str> {
+    trimmed
+        .strip_prefix("```")
+        .or_else(|| trimmed.strip_prefix("~~~"))
+        .map(str::trim)
+}
+
+fn is_lcars_dataview_fence_info(fence_info: &str) -> bool {
+    fence_info
+        .split_whitespace()
+        .next()
+        .is_some_and(|language| language.eq_ignore_ascii_case("lcars-dataview"))
+}
+
+fn dataview_column_widths(
+    document: &LcarsDataViewDocument,
+    table_columns: usize,
+    max_cols: usize,
+) -> Vec<usize> {
+    if table_columns == 0 {
+        return vec![];
+    }
+
+    let gap_total = table_columns.saturating_sub(1) * 2;
+    let usable = max_cols.saturating_sub(gap_total).max(table_columns);
+    let per_column_cap = (usable / table_columns).clamp(4, 22);
+    let mut widths = Vec::with_capacity(table_columns);
+
+    for index in 0..table_columns {
+        let mut width = document
+            .columns
+            .get(index)
+            .map(|column| column.chars().count())
+            .unwrap_or(4)
+            .max(4);
+        for row in &document.rows {
+            if let Some(cell) = row.get(index) {
+                width = width.max(cell.chars().count());
+            }
+        }
+        widths.push(width.min(per_column_cap));
+    }
+
+    widths
+}
+
+fn format_dataview_cells<S: AsRef<str>>(cells: &[S], widths: &[usize]) -> String {
+    let mut parts = Vec::with_capacity(widths.len());
+    for (index, width) in widths.iter().copied().enumerate() {
+        let value = cells
+            .get(index)
+            .map(AsRef::as_ref)
+            .map(|text| fit_lcars_markdown_text(text, width))
+            .unwrap_or_default();
+        parts.push(format!("{value:<width$}"));
+    }
+    parts.join("  ")
+}
+
+fn fit_lcars_markdown_text(text: &str, max_cols: usize) -> String {
+    if max_cols == 0 {
+        return String::new();
+    }
+
+    let mut chars = text.chars();
+    let mut fitted = String::new();
+    for _ in 0..max_cols {
+        let Some(ch) = chars.next() else {
+            return text.to_string();
+        };
+        fitted.push(ch);
+    }
+
+    if chars.next().is_some() {
+        if max_cols == 1 {
+            "~".to_string()
+        } else {
+            fitted.pop();
+            fitted.push('~');
+            fitted
+        }
+    } else {
+        text.to_string()
+    }
+}
+
+fn is_markdown_rule(trimmed: &str) -> bool {
+    let mut chars = trimmed.chars().filter(|ch| !ch.is_whitespace());
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !matches!(first, '-' | '*' | '_') {
+        return false;
+    }
+    let mut count = 1;
+    for ch in chars {
+        if ch != first {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 3
+}
+
+fn is_markdown_table_row(trimmed: &str) -> bool {
+    trimmed.matches('|').count() >= 2
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OwtTranscriptMarkerVisual {
+    primary: LinearRgba,
+    secondary: LinearRgba,
+    section_rule: bool,
+    strong: bool,
+}
+
+impl OwtTranscriptMarkerVisual {
+    fn for_event(event: &OwtTranscriptEvent) -> Option<Self> {
+        match event.event.as_str() {
+            "owt.section" => Some(Self {
+                primary: owt_marker_color(255, 156, 0, 0.95),
+                secondary: owt_marker_color(255, 204, 102, 0.78),
+                section_rule: true,
+                strong: false,
+            }),
+            "owt.task" => Some(Self {
+                primary: owt_marker_color(204, 153, 255, 0.86),
+                secondary: owt_marker_color(255, 204, 102, 0.70),
+                section_rule: false,
+                strong: false,
+            }),
+            "owt.finding" | "owt.assessment" => Some(Self {
+                primary: owt_marker_color(102, 153, 204, 0.88),
+                secondary: owt_marker_color(204, 153, 255, 0.70),
+                section_rule: false,
+                strong: false,
+            }),
+            "owt.source" => Some(Self {
+                primary: owt_marker_color(255, 204, 102, 0.78),
+                secondary: owt_marker_color(102, 153, 204, 0.64),
+                section_rule: false,
+                strong: false,
+            }),
+            "owt.warning" | "owt.error" => Some(Self {
+                primary: owt_marker_color(255, 102, 102, 0.95),
+                secondary: owt_marker_color(255, 204, 102, 0.82),
+                section_rule: false,
+                strong: true,
+            }),
+            _ => None,
+        }
+    }
+
+    fn for_lcars_markdown(kind: LcarsMarkdownKind) -> Self {
+        match kind {
+            LcarsMarkdownKind::Section { level } => Self {
+                primary: if level <= 2 {
+                    owt_marker_color(255, 156, 0, 0.88)
+                } else {
+                    owt_marker_color(255, 204, 102, 0.80)
+                },
+                secondary: owt_marker_color(255, 204, 102, 0.62),
+                section_rule: level <= 2,
+                strong: false,
+            },
+            LcarsMarkdownKind::Task => Self {
+                primary: owt_marker_color(204, 153, 255, 0.76),
+                secondary: owt_marker_color(255, 204, 102, 0.62),
+                section_rule: false,
+                strong: false,
+            },
+            LcarsMarkdownKind::Finding | LcarsMarkdownKind::Assessment => Self {
+                primary: owt_marker_color(102, 153, 204, 0.76),
+                secondary: owt_marker_color(204, 153, 255, 0.58),
+                section_rule: false,
+                strong: false,
+            },
+            LcarsMarkdownKind::Source => Self {
+                primary: owt_marker_color(255, 204, 102, 0.68),
+                secondary: owt_marker_color(102, 153, 204, 0.56),
+                section_rule: false,
+                strong: false,
+            },
+            LcarsMarkdownKind::Warning | LcarsMarkdownKind::Error => Self {
+                primary: owt_marker_color(255, 102, 102, 0.88),
+                secondary: owt_marker_color(255, 204, 102, 0.74),
+                section_rule: false,
+                strong: true,
+            },
+            LcarsMarkdownKind::Code => Self {
+                primary: owt_marker_color(204, 153, 255, 0.64),
+                secondary: owt_marker_color(102, 153, 204, 0.54),
+                section_rule: false,
+                strong: true,
+            },
+            LcarsMarkdownKind::Divider => Self {
+                primary: owt_marker_color(255, 156, 0, 0.72),
+                secondary: owt_marker_color(255, 204, 102, 0.62),
+                section_rule: true,
+                strong: false,
+            },
+            LcarsMarkdownKind::Table => Self {
+                primary: owt_marker_color(102, 153, 204, 0.72),
+                secondary: owt_marker_color(255, 204, 102, 0.56),
+                section_rule: false,
+                strong: true,
+            },
+        }
+    }
+}
+
+fn owt_marker_color(red: u8, green: u8, blue: u8, alpha: f32) -> LinearRgba {
+    let red = red as f32 / 255.0;
+    let green = green as f32 / 255.0;
+    let blue = blue as f32 / 255.0;
+    LinearRgba::with_components(red, green, blue, alpha)
+}
+
+#[cfg(test)]
+mod owt_marker_tests {
+    use super::*;
+
+    fn event(name: &str) -> OwtTranscriptEvent {
+        OwtTranscriptEvent {
+            row: 0,
+            col: 0,
+            seqno: 0,
+            event: name.to_string(),
+            payload_json: r#"{"version":1}"#.to_string(),
+        }
+    }
+
+    fn lcars_line(stable_row: StableRowIndex, text: &str) -> LcarsMarkdownLine {
+        LcarsMarkdownLine {
+            stable_row,
+            text: text.to_string(),
+        }
+    }
+
+    fn lcars_markdown_kinds(
+        lines: &[LcarsMarkdownLine],
+    ) -> Vec<(StableRowIndex, LcarsMarkdownKind)> {
+        LcarsMarkdownScanner::scan(lines, 0..100)
+            .markers
+            .into_iter()
+            .map(|marker| (marker.stable_row, marker.kind))
+            .collect()
+    }
+
+    fn lcars_markdown_suppressed_rows(lines: &[LcarsMarkdownLine]) -> Vec<StableRowIndex> {
+        LcarsMarkdownScanner::scan(lines, 0..100).suppressed_rows
+    }
+
+    fn lcars_markdown_dataview_titles(lines: &[LcarsMarkdownLine]) -> Vec<String> {
+        LcarsMarkdownScanner::scan(lines, 0..100)
+            .dataview_blocks
+            .into_iter()
+            .map(|block| block.document.title)
+            .collect()
+    }
+
+    fn lcars_markdown_dataview_ranges(
+        lines: &[LcarsMarkdownLine],
+    ) -> Vec<(StableRowIndex, StableRowIndex)> {
+        LcarsMarkdownScanner::scan(lines, 0..100)
+            .dataview_blocks
+            .into_iter()
+            .map(|block| (block.start_row, block.end_row))
+            .collect()
+    }
+
+    fn lcars_markdown_dataview_layouts(
+        lines: &[LcarsMarkdownLine],
+        pane_cols: usize,
+    ) -> Vec<LcarsMarkdownDataViewLayout> {
+        LcarsMarkdownScanner::scan(lines, 0..100)
+            .dataview_blocks
+            .into_iter()
+            .filter_map(|block| {
+                let block_rows = (block.end_row - block.start_row + 1).max(1) as usize;
+                lcars_markdown_dataview_layout(&block, pane_cols, block_rows)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn owt_marker_visuals_cover_initial_events() {
+        for name in [
+            "owt.section",
+            "owt.task",
+            "owt.finding",
+            "owt.source",
+            "owt.assessment",
+            "owt.warning",
+            "owt.error",
+        ] {
+            assert!(OwtTranscriptMarkerVisual::for_event(&event(name)).is_some());
+        }
+    }
+
+    #[test]
+    fn owt_marker_visuals_ignore_unknown_events() {
+        assert!(OwtTranscriptMarkerVisual::for_event(&event("owt.future")).is_none());
+        assert!(OwtTranscriptMarkerVisual::for_event(&event("not_owt")).is_none());
+    }
+
+    #[test]
+    fn lcars_markdown_requires_sentinel() {
+        let lines = [
+            lcars_line(0, "# Report"),
+            lcars_line(1, "- [x] done"),
+            lcars_line(2, "> quote"),
+        ];
+
+        assert_eq!(
+            LcarsMarkdownScanner::scan(&lines, 0..10),
+            LcarsMarkdownScan::default()
+        );
+    }
+
+    #[test]
+    fn lcars_markdown_classifies_initial_shapes() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "# Report"),
+            lcars_line(2, "- [x] done"),
+            lcars_line(3, "> source"),
+            lcars_line(4, "> [!WARNING] warning"),
+            lcars_line(5, "---"),
+            lcars_line(6, "| key | value |"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![
+                (1, LcarsMarkdownKind::Section { level: 1 }),
+                (2, LcarsMarkdownKind::Task),
+                (3, LcarsMarkdownKind::Source),
+                (4, LcarsMarkdownKind::Warning),
+                (5, LcarsMarkdownKind::Divider),
+                (6, LcarsMarkdownKind::Table),
+            ]
+        );
+    }
+
+    #[test]
+    fn lcars_markdown_hint_applies_to_next_block() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "<!-- lcars: finding severity=warn -->"),
+            lcars_line(2, "plain finding text"),
+            lcars_line(3, "<!-- lcars: assessment -->"),
+            lcars_line(4, "assessment text"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![
+                (2, LcarsMarkdownKind::Warning),
+                (4, LcarsMarkdownKind::Assessment),
+            ]
+        );
+        assert_eq!(lcars_markdown_suppressed_rows(&lines), vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn lcars_markdown_ignores_unknown_hint() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "<!-- lcars: future-widget -->"),
+            lcars_line(2, "plain text"),
+            lcars_line(3, "## Known heading"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![(3, LcarsMarkdownKind::Section { level: 2 })]
+        );
+        assert_eq!(lcars_markdown_suppressed_rows(&lines), vec![0]);
+    }
+
+    #[test]
+    fn lcars_markdown_suppresses_sentinel_and_known_hints() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "<!-- lcars: source -->"),
+            lcars_line(2, "> source text"),
+            lcars_line(3, "<!-- lcars: future-widget -->"),
+            lcars_line(4, "## Known heading"),
+        ];
+
+        assert_eq!(lcars_markdown_suppressed_rows(&lines), vec![0, 1]);
+    }
+
+    #[test]
+    fn lcars_markdown_tracks_code_fences() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "```sh"),
+            lcars_line(2, "echo bridge"),
+            lcars_line(3, "```"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![
+                (1, LcarsMarkdownKind::Code),
+                (2, LcarsMarkdownKind::Code),
+                (3, LcarsMarkdownKind::Code),
+            ]
+        );
+    }
+
+    #[test]
+    fn lcars_markdown_marks_dataview_fences_inline() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "```lcars-dataview"),
+            lcars_line(
+                2,
+                r#"{"version":1,"kind":"owt.lcars.dataview","id":"fleet.demo","title":"Fleet Demo","columns":["Ship","Registry"],"rows":[["Enterprise","1701"]]}"#,
+            ),
+            lcars_line(3, "```"),
+            lcars_line(4, "```sh"),
+            lcars_line(5, "echo still-code"),
+            lcars_line(6, "```"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![
+                (4, LcarsMarkdownKind::Code),
+                (5, LcarsMarkdownKind::Code),
+                (6, LcarsMarkdownKind::Code),
+            ]
+        );
+        assert_eq!(lcars_markdown_suppressed_rows(&lines), vec![0, 1, 2, 3]);
+        assert_eq!(lcars_markdown_dataview_titles(&lines), vec!["Fleet Demo"]);
+    }
+
+    #[test]
+    fn lcars_markdown_dataview_replaces_adjacent_fallback_table() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "| Ship | Registry |"),
+            lcars_line(2, "| Enterprise | 1701 |"),
+            lcars_line(3, ""),
+            lcars_line(4, "```lcars-dataview"),
+            lcars_line(
+                5,
+                r#"{"version":1,"kind":"owt.lcars.dataview","id":"fleet.demo","title":"Fleet Demo","columns":["Ship","Registry"],"rows":[["Enterprise","1701"]]}"#,
+            ),
+            lcars_line(6, "```"),
+        ];
+
+        assert!(lcars_markdown_kinds(&lines).is_empty());
+        assert_eq!(
+            lcars_markdown_suppressed_rows(&lines),
+            vec![0, 1, 2, 4, 5, 6]
+        );
+        assert_eq!(lcars_markdown_dataview_ranges(&lines), vec![(1, 6)]);
+    }
+
+    #[test]
+    fn lcars_markdown_dataview_layout_is_content_aware() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "| Ship | Registry | Class | Crew | Status |"),
+            lcars_line(2, "| Enterprise | 1701 | Constitution | 430 | active |"),
+            lcars_line(3, ""),
+            lcars_line(4, "```lcars-dataview"),
+            lcars_line(
+                5,
+                r#"{"version":1,"kind":"owt.lcars.dataview","id":"fleet.demo.inline","title":"Fleet Demo Inline","columns":["Ship","Registry","Class","Crew","Status"],"rows":[["Enterprise","1701","Constitution","430","active"],["Voyager","74656","Intrepid","150","survey"],["Defiant","74205","Escort","50","tactical"]]}"#,
+            ),
+            lcars_line(6, "```"),
+        ];
+
+        let layouts = lcars_markdown_dataview_layouts(&lines, 180);
+        assert_eq!(layouts.len(), 1);
+        let layout = layouts[0];
+        assert_eq!(layout.visible_rows, 6);
+        assert_eq!(layout.bay_cols, layout.rail_cols + 2 + layout.text_cols);
+        assert!(layout.bay_cols < 90);
+        assert!(layout.text_cols >= 45);
+    }
+
+    #[test]
+    fn lcars_markdown_dataview_layout_clamps_to_narrow_pane() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "```lcars-dataview"),
+            lcars_line(
+                2,
+                r#"{"version":1,"kind":"owt.lcars.dataview","id":"fleet.demo","title":"Fleet Demo","columns":["Ship","Registry"],"rows":[["Enterprise","1701"]]}"#,
+            ),
+            lcars_line(3, "```"),
+        ];
+
+        let layouts = lcars_markdown_dataview_layouts(&lines, 24);
+        assert_eq!(layouts.len(), 1);
+        assert_eq!(layouts[0].bay_cols, 24);
+        assert_eq!(layouts[0].text_cols, 20);
+    }
+
+    #[test]
+    fn lcars_markdown_leaves_invalid_dataview_visible() {
+        let lines = [
+            lcars_line(0, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(1, "```lcars-dataview"),
+            lcars_line(2, r#"{"version":1}"#),
+            lcars_line(3, "```"),
+        ];
+
+        assert_eq!(
+            lcars_markdown_kinds(&lines),
+            vec![
+                (1, LcarsMarkdownKind::Warning),
+                (2, LcarsMarkdownKind::Code),
+                (3, LcarsMarkdownKind::Code),
+            ]
+        );
+        assert_eq!(lcars_markdown_suppressed_rows(&lines), vec![0]);
+        assert!(lcars_markdown_dataview_titles(&lines).is_empty());
+    }
+
+    #[test]
+    fn lcars_markdown_visible_range_filters_lookback_lines() {
+        let lines = [
+            lcars_line(-2, "<!-- owt:lcars-md v=1 -->"),
+            lcars_line(-1, "# Above viewport"),
+            lcars_line(0, "## Visible"),
+        ];
+
+        let markers = LcarsMarkdownScanner::scan(&lines, 0..1).markers;
+        assert_eq!(
+            markers,
+            vec![LcarsMarkdownMarker {
+                stable_row: 0,
+                kind: LcarsMarkdownKind::Section { level: 2 },
+            }]
+        );
     }
 }

@@ -17,8 +17,8 @@ use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
-    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, SemanticZone, StableRowIndex,
-    TerminalConfiguration, TerminalSize,
+    Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, OwtTranscriptEvent,
+    SemanticZone, StableRowIndex, TerminalConfiguration, TerminalSize,
 };
 
 static PANE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
@@ -240,6 +240,10 @@ pub trait Pane: Downcast + Send + Sync {
 
     fn copy_user_vars(&self) -> HashMap<String, String> {
         HashMap::new()
+    }
+
+    fn copy_owt_transcript_events(&self) -> Vec<OwtTranscriptEvent> {
+        Vec::new()
     }
 
     fn erase_scrollback(&self, _erase_mode: ScrollbackEraseMode) {}

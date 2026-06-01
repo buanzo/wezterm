@@ -400,9 +400,52 @@ The table below is keyed by the OSC code.
 |104|ResetColors | Reset color palette entries to their default values | |
 |133|FinalTerm semantic escapes| Informs the terminal about Input, Output and Prompt regions on the display | [See Shell Integration](shell-integration.md) |
 |777|Call rxvt extension| Only the notify extension is supported; it shows a "toast" notification | `printf "\e]777;notify;%s;%s\e\\" "title" "body"` |
+|1701|OWT 1701| Records OWT-private semantic transcript annotations and sandboxed DataView chunks | `OSC 1701 ; owt.section ; BASE64URL_JSON ST` |
 |1337 |iTerm2 File Upload Protocol | Allows displaying images inline | [See iTerm Image Protocol](imgcat.md) |
 |L  |Set Icon Name (Sun) | Same as OSC 1 | `\x1b]Ltab-title\x1b\\` |
 |l  |Set Window Title (Sun) | Same as OSC 2 | `\x1b]lwindow-title\x1b\\` |
+
+### OSC 1701 - OWT 1701 Markers
+
+OWT reserves OSC 1701 for OWT-private semantic terminal payloads. The first
+class is OWT 1701 Markers: small semantic transcript annotations that travel
+with ordinary terminal output. OSC means Operating System Command and is an
+existing ANSI/VT-style escape family; OWT only defines this private selector and
+payload convention. Durable LCARS surfaces and lifecycle operations still
+belong on the native OWT endpoint; marker events are only for scrolling
+transcript-local hints such as sections, tasks, findings, sources, assessments,
+warnings, and errors.
+
+The accepted form is:
+
+```text
+ESC ] 1701 ; owt.<event> ; base64url(json-object-without-padding) ST
+```
+
+The payload must decode as UTF-8, be at most 4096 bytes, be a JSON object, and
+avoid credential-sensitive keys such as token, secret, password, credential,
+api_key, access_token, refresh_token, or bearer. Non-OWT terminals should ignore
+the sequence while the surrounding plain text remains readable. Native OWT keeps
+the terminal text intact and may paint LCARS transcript chrome for recognized
+events.
+
+LCARSMarkdown is the related no-escape path for readable Markdown reports. A
+`.lcars.md` file uses HTML comments such as `<!-- owt:lcars-md v=1 -->` and
+`<!-- lcars: finding severity=warn -->`, so it is documented with OWT operator
+help rather than as an OSC sequence. Native OWT may visually suppress recognized
+LCARSMarkdown control comments after scanning while keeping scrollback text
+unchanged, and may mark fenced `lcars-dataview` blocks inline. Use OSC 1701
+when a script needs explicit event control; use LCARSMarkdown when normal
+Markdown structure is enough.
+
+LCARS DataView uses the same private selector for sandboxed table widgets:
+`owt.dataview.begin`, `owt.dataview.chunk`, and `owt.dataview.end` carry a
+chunked JSON payload from a cat-able `.lcars` file. Native OWT assembles a valid
+DataView into a transient local overlay with search, sort, and paging. Inline
+`lcars-dataview` fences inside `.lcars.md` remain safe Markdown content and do
+not auto-open that overlay. DataView does not call MCP, does not use the native
+endpoint, does not execute commands, and does not register trusted
+`InterfaceDocument` actions.
 
 # Additional Resources
 

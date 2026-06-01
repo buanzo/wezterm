@@ -1,6 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    GuiWin, MouseCapture, OwtLcarsDragPreviewState, PositionedSplit, ScrollHit, TermWindowNotif,
+    UIItem, UIItemType, TMB,
 };
 use ::window::{
     MouseButtons as WMB, MouseCursor, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -23,19 +24,32 @@ use wezterm_dynamic::ToDynamic;
 use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
+fn ui_item_hit_priority(item_type: &UIItemType) -> usize {
+    match item_type {
+        UIItemType::OwtLcarsSurfaceControl(_) => 10,
+        UIItemType::OwtLcarsWindowChrome => 20,
+        UIItemType::OwtLcarsAction { .. } | UIItemType::OwtLcarsTableCell { .. } => 30,
+        UIItemType::OwtLcarsPermissionDecision { .. } => 35,
+        UIItemType::OwtLcarsSurfaceResize { .. } => 40,
+        _ => 30,
+    }
+}
+
 impl super::TermWindow {
     fn resolve_ui_item(&self, event: &MouseEvent) -> Option<UIItem> {
         let x = event.coords.x;
         let y = event.coords.y;
         self.ui_items
             .iter()
-            .rev()
-            .find(|item| item.hit_test(x, y))
+            .enumerate()
+            .filter(|(_, item)| item.hit_test(x, y))
+            .max_by_key(|(index, item)| (ui_item_hit_priority(&item.item_type), *index))
+            .map(|(_, item)| item)
             .cloned()
     }
 
     fn leave_ui_item(&mut self, item: &UIItem) {
-        match item.item_type {
+        match item.item_type.clone() {
             UIItemType::TabBar(_) => {
                 self.update_title_post_status();
             }
@@ -44,19 +58,29 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::OwtLcarsAction(_) => {}
+            | UIItemType::OwtLcarsAction { .. }
+            | UIItemType::OwtLcarsPermissionDecision { .. }
+            | UIItemType::OwtLcarsTableCell { .. }
+            | UIItemType::OwtLcarsSurfaceControl(_)
+            | UIItemType::OwtLcarsSurfaceResize { .. }
+            | UIItemType::OwtLcarsWindowChrome => {}
         }
     }
 
     fn enter_ui_item(&mut self, item: &UIItem) {
-        match item.item_type {
+        match item.item_type.clone() {
             UIItemType::TabBar(_) => {}
             UIItemType::CloseTab(_)
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::OwtLcarsAction(_) => {}
+            | UIItemType::OwtLcarsAction { .. }
+            | UIItemType::OwtLcarsPermissionDecision { .. }
+            | UIItemType::OwtLcarsTableCell { .. }
+            | UIItemType::OwtLcarsSurfaceControl(_)
+            | UIItemType::OwtLcarsSurfaceResize { .. }
+            | UIItemType::OwtLcarsWindowChrome => {}
         }
     }
 
@@ -68,6 +92,9 @@ impl super::TermWindow {
         };
 
         self.current_mouse_event.replace(event.clone());
+        if self.handle_owt_lcars_surface_menu_mouse(&event, context) {
+            return;
+        }
 
         let border = self.get_os_border();
 
@@ -131,9 +158,12 @@ impl super::TermWindow {
                     // Completed a window drag
                     return;
                 }
-                if press == &MousePress::Left && self.dragging.take().is_some() {
+                if press == &MousePress::Left {
                     // Completed a drag
-                    return;
+                    if let Some((item, start_event)) = self.dragging.take() {
+                        self.finish_drag_ui_item(item, start_event, event.clone(), context);
+                        return;
+                    }
                 }
             }
 
@@ -343,17 +373,205 @@ impl super::TermWindow {
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
-        match item.item_type {
+        match item.item_type.clone() {
             UIItemType::Split(split) => {
                 self.drag_split(item, split, start_event, x, y, context);
             }
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
             }
+            UIItemType::OwtLcarsSurfaceControl(interface_id) => {
+                self.drag_owt_lcars_surface_control(
+                    item,
+                    interface_id,
+                    start_event,
+                    event,
+                    context,
+                );
+            }
+            UIItemType::OwtLcarsAction { interface_id, .. } => {
+                self.drag_owt_lcars_action(item, interface_id, start_event, event, context);
+            }
+            UIItemType::OwtLcarsSurfaceResize { .. } => {
+                self.drag_owt_lcars_surface_resize(item, start_event, context);
+            }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
             }
         }
+    }
+
+    fn finish_drag_ui_item(
+        &mut self,
+        item: UIItem,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        match item.item_type {
+            UIItemType::OwtLcarsSurfaceControl(interface_id) => self
+                .finish_drag_owt_lcars_surface_control(interface_id, start_event, event, context),
+            UIItemType::OwtLcarsAction {
+                interface_id,
+                action_id,
+            } => self.finish_drag_owt_lcars_action(
+                interface_id,
+                action_id,
+                start_event,
+                event,
+                context,
+            ),
+            UIItemType::OwtLcarsSurfaceResize {
+                interface_id,
+                panel_left,
+                panel_top,
+            } => self.finish_drag_owt_lcars_surface_resize(
+                interface_id,
+                panel_left,
+                panel_top,
+                start_event,
+                event,
+                context,
+            ),
+            _ => {}
+        }
+    }
+
+    fn drag_owt_lcars_surface_control(
+        &mut self,
+        item: UIItem,
+        interface_id: String,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        self.update_owt_lcars_drag_preview(&interface_id, &start_event, &event, context);
+        self.dragging.replace((item, start_event));
+    }
+
+    fn drag_owt_lcars_action(
+        &mut self,
+        item: UIItem,
+        interface_id: String,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        self.update_owt_lcars_drag_preview(&interface_id, &start_event, &event, context);
+        self.dragging.replace((item, start_event));
+    }
+
+    fn update_owt_lcars_drag_preview(
+        &mut self,
+        interface_id: &str,
+        start_event: &MouseEvent,
+        event: &MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        if !owt_lcars_drag_exceeded_threshold(start_event, event) {
+            if self.owt_lcars_drag_preview.take().is_some() {
+                context.invalidate();
+            }
+            return;
+        }
+
+        self.owt_lcars_drag_preview = Some(OwtLcarsDragPreviewState {
+            interface_id: interface_id.to_string(),
+            x: event.coords.x.max(0) as f32,
+            y: event.coords.y.max(0) as f32,
+        });
+        context.invalidate();
+    }
+
+    fn drag_owt_lcars_surface_resize(
+        &mut self,
+        item: UIItem,
+        start_event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
+        self.dragging.replace((item, start_event));
+    }
+
+    fn finish_drag_owt_lcars_surface_control(
+        &mut self,
+        interface_id: String,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        self.owt_lcars_drag_preview = None;
+        if !owt_lcars_drag_exceeded_threshold(&start_event, &event) {
+            self.play_owt_lcars_private_click_sound();
+            self.show_owt_lcars_surface_menu(Some(interface_id));
+            return;
+        }
+
+        let properties =
+            crate::termwindow::render::owt_lcars::owt_lcars_drag_drop_layout_properties(
+                event.coords.x.max(0) as f32,
+                event.coords.y.max(0) as f32,
+                self.dimensions.pixel_width as f32,
+                self.dimensions.pixel_height as f32,
+            );
+        self.patch_owt_lcars_layout_properties_for_interface(Some(interface_id), properties);
+        context.invalidate();
+    }
+
+    fn finish_drag_owt_lcars_action(
+        &mut self,
+        interface_id: String,
+        action_id: String,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        self.owt_lcars_drag_preview = None;
+        if !owt_lcars_drag_exceeded_threshold(&start_event, &event) {
+            self.dispatch_owt_lcars_action(&interface_id, &action_id, context);
+            return;
+        }
+
+        let properties =
+            crate::termwindow::render::owt_lcars::owt_lcars_drag_drop_layout_properties(
+                event.coords.x.max(0) as f32,
+                event.coords.y.max(0) as f32,
+                self.dimensions.pixel_width as f32,
+                self.dimensions.pixel_height as f32,
+            );
+        self.patch_owt_lcars_layout_properties_for_interface(Some(interface_id), properties);
+        context.invalidate();
+    }
+
+    fn finish_drag_owt_lcars_surface_resize(
+        &mut self,
+        interface_id: String,
+        panel_left: usize,
+        panel_top: usize,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
+        self.owt_lcars_drag_preview = None;
+        if !owt_lcars_drag_exceeded_threshold(&start_event, &event) {
+            return;
+        }
+
+        let properties = crate::termwindow::render::owt_lcars::owt_lcars_resize_layout_properties(
+            panel_left as f32,
+            panel_top as f32,
+            event.coords.x.max(0) as f32,
+            event.coords.y.max(0) as f32,
+            self.dimensions.pixel_width as f32,
+            self.dimensions.pixel_height as f32,
+        );
+        self.patch_owt_lcars_layout_properties_for_interface(Some(interface_id), properties);
+        context.invalidate();
     }
 
     fn mouse_event_ui_item(
@@ -365,7 +583,7 @@ impl super::TermWindow {
         context: &dyn WindowOps,
     ) {
         self.last_ui_item.replace(item.clone());
-        match item.item_type {
+        match item.item_type.clone() {
             UIItemType::TabBar(item) => {
                 self.mouse_event_tab_bar(item, event, context);
             }
@@ -384,15 +602,62 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
-            UIItemType::OwtLcarsAction(action_id) => {
-                self.mouse_event_owt_lcars_action(action_id, event, context);
+            UIItemType::OwtLcarsAction {
+                interface_id,
+                action_id,
+            } => {
+                self.mouse_event_owt_lcars_action(item, interface_id, action_id, event, context);
+            }
+            UIItemType::OwtLcarsPermissionDecision { request_id, allow } => {
+                self.mouse_event_owt_lcars_permission_decision(request_id, allow, event, context);
+            }
+            UIItemType::OwtLcarsTableCell {
+                interface_id,
+                column,
+            } => {
+                self.mouse_event_owt_lcars_table_cell(interface_id, column, event, context);
+            }
+            UIItemType::OwtLcarsSurfaceControl(interface_id) => {
+                self.mouse_event_owt_lcars_surface_control(item, interface_id, event, context);
+            }
+            UIItemType::OwtLcarsSurfaceResize { .. } => {
+                self.mouse_event_owt_lcars_surface_resize(item, event, context);
+            }
+            UIItemType::OwtLcarsWindowChrome => {
+                self.mouse_event_owt_lcars_window_chrome(event, context);
             }
         }
     }
 
     fn mouse_event_owt_lcars_action(
         &mut self,
+        item: UIItem,
+        interface_id: String,
         action_id: String,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        match event.kind {
+            WMEK::Press(MousePress::Left) => {
+                self.owt_lcars_drag_preview = None;
+                self.dragging.replace((item, event));
+            }
+            WMEK::Press(MousePress::Right) => {
+                self.owt_lcars_drag_preview = None;
+                self.play_owt_lcars_private_click_sound();
+                self.show_owt_lcars_surface_menu(Some(interface_id));
+            }
+            _ => {
+                let _ = action_id;
+            }
+        }
+    }
+
+    fn mouse_event_owt_lcars_permission_decision(
+        &mut self,
+        request_id: String,
+        allow: bool,
         event: MouseEvent,
         context: &dyn WindowOps,
     ) {
@@ -401,7 +666,72 @@ impl super::TermWindow {
             return;
         }
 
-        self.dispatch_owt_lcars_action(&action_id, context);
+        self.decide_owt_lcars_permission(&request_id, allow, context);
+    }
+
+    fn mouse_event_owt_lcars_table_cell(
+        &mut self,
+        interface_id: String,
+        column: String,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        match event.kind {
+            WMEK::Press(MousePress::Left) => {
+                self.focus_owt_lcars_table_cell(&interface_id, &column, context);
+            }
+            WMEK::Press(MousePress::Right) => {
+                self.play_owt_lcars_private_click_sound();
+                self.show_owt_lcars_surface_menu(Some(interface_id));
+            }
+            _ => {}
+        }
+    }
+
+    fn mouse_event_owt_lcars_surface_control(
+        &mut self,
+        item: UIItem,
+        interface_id: String,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        match event.kind {
+            WMEK::Press(MousePress::Left) => {
+                self.owt_lcars_drag_preview = None;
+                self.dragging.replace((item, event));
+            }
+            WMEK::Press(MousePress::Right) => {
+                self.owt_lcars_drag_preview = None;
+                self.play_owt_lcars_private_click_sound();
+                self.show_owt_lcars_surface_menu(Some(interface_id));
+            }
+            _ => {}
+        }
+    }
+
+    fn mouse_event_owt_lcars_surface_resize(
+        &mut self,
+        item: UIItem,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(MouseCursor::SizeLeftRight));
+        if event.kind == WMEK::Press(MousePress::Left) {
+            self.dragging.replace((item, event));
+        }
+    }
+
+    fn mouse_event_owt_lcars_window_chrome(&mut self, event: MouseEvent, context: &dyn WindowOps) {
+        context.set_cursor(Some(MouseCursor::Hand));
+        match event.kind {
+            WMEK::Press(MousePress::Left) | WMEK::Press(MousePress::Right) => {
+                self.play_owt_lcars_private_click_sound();
+                self.show_owt_lcars_surface_menu(None);
+            }
+            _ => {}
+        }
     }
 
     pub fn mouse_event_close_tab(
@@ -542,8 +872,9 @@ impl super::TermWindow {
                 | TabBarItem::WindowButton(_) => {}
             },
             WMEK::Press(MousePress::Right) => match item {
-                TabBarItem::Tab { .. } => {
-                    self.show_tab_navigator();
+                TabBarItem::Tab { tab_idx, .. } => {
+                    self.activate_tab(tab_idx as isize).ok();
+                    self.show_owt_lcars_surface_menu(None);
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Right);
@@ -1068,5 +1399,44 @@ fn mouse_press_to_tmb(press: &MousePress) -> TMB {
         MousePress::Left => TMB::Left,
         MousePress::Right => TMB::Right,
         MousePress::Middle => TMB::Middle,
+    }
+}
+
+fn owt_lcars_drag_exceeded_threshold(start_event: &MouseEvent, event: &MouseEvent) -> bool {
+    let dx = start_event.coords.x - event.coords.x;
+    let dy = start_event.coords.y - event.coords.y;
+    dx.abs().max(dy.abs()) >= 12
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ui_item_hit_priority;
+    use crate::termwindow::UIItemType;
+
+    #[test]
+    fn lcars_specific_hitboxes_outrank_surface_control_hitboxes() {
+        let surface = UIItemType::OwtLcarsSurfaceControl("surface".to_string());
+        let table_cell = UIItemType::OwtLcarsTableCell {
+            interface_id: "surface".to_string(),
+            column: "kernel".to_string(),
+        };
+        let action = UIItemType::OwtLcarsAction {
+            interface_id: "surface".to_string(),
+            action_id: "kernel.inspect".to_string(),
+        };
+        let permission = UIItemType::OwtLcarsPermissionDecision {
+            request_id: "request-001".to_string(),
+            allow: true,
+        };
+        let resize = UIItemType::OwtLcarsSurfaceResize {
+            interface_id: "surface".to_string(),
+            panel_left: 0,
+            panel_top: 0,
+        };
+
+        assert!(ui_item_hit_priority(&table_cell) > ui_item_hit_priority(&surface));
+        assert!(ui_item_hit_priority(&action) > ui_item_hit_priority(&surface));
+        assert!(ui_item_hit_priority(&permission) > ui_item_hit_priority(&action));
+        assert!(ui_item_hit_priority(&resize) > ui_item_hit_priority(&table_cell));
     }
 }

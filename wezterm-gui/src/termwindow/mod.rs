@@ -6,8 +6,8 @@ use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
-    QuickSelectOverlay,
+    owt_dataview_overlay, start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay,
+    LauncherArgs, LauncherFlags, LcarsDataViewDocument, QuickSelectOverlay,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
@@ -155,7 +155,25 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
-    OwtLcarsAction(String),
+    OwtLcarsAction {
+        interface_id: String,
+        action_id: String,
+    },
+    OwtLcarsPermissionDecision {
+        request_id: String,
+        allow: bool,
+    },
+    OwtLcarsTableCell {
+        interface_id: String,
+        column: String,
+    },
+    OwtLcarsSurfaceControl(String),
+    OwtLcarsSurfaceResize {
+        interface_id: String,
+        panel_left: usize,
+        panel_top: usize,
+    },
+    OwtLcarsWindowChrome,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +192,32 @@ impl UIItem {
             && y >= self.y as isize
             && y <= (self.y + self.height) as isize
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwtLcarsSurfaceMenuMode {
+    Main,
+    LoadSaved,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OwtLcarsSurfaceMenuState {
+    pub(crate) mode: OwtLcarsSurfaceMenuMode,
+    pub(crate) selected_idx: usize,
+    pub(crate) saved_page: usize,
+    pub(crate) saved_owner_filter: Option<String>,
+    pub(crate) saved_interfaces: Vec<crate::owt_native::SavedInterfaceSummary>,
+    pub(crate) status_line: Option<String>,
+    pub(crate) target_interface_id: Option<String>,
+    pub(crate) anchor_x: f32,
+    pub(crate) anchor_y: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OwtLcarsDragPreviewState {
+    pub(crate) interface_id: String,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
 }
 
 #[derive(Clone, Default)]
@@ -430,6 +474,9 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    owt_lcars_surface_menu: Option<OwtLcarsSurfaceMenuState>,
+    owt_lcars_drag_preview: Option<OwtLcarsDragPreviewState>,
+    owt_lcars_action_page_by_interface: HashMap<String, usize>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -770,6 +817,9 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            owt_lcars_surface_menu: None,
+            owt_lcars_drag_preview: None,
+            owt_lcars_action_page_by_interface: HashMap::new(),
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
@@ -1167,6 +1217,17 @@ impl TermWindow {
                     self.mux_pane_output_event(pane_id);
                 }
                 MuxNotification::Alert {
+                    alert: Alert::OwtTranscriptEvent(event),
+                    pane_id,
+                } => {
+                    self.mux_pane_output_event(pane_id);
+                    if let Some(document) =
+                        crate::overlay::owt_dataview::accept_owt_dataview_event(&event)
+                    {
+                        self.show_owt_dataview_overlay(pane_id, document);
+                    }
+                }
+                MuxNotification::Alert {
                     alert: Alert::Bell,
                     pane_id,
                 } => {
@@ -1391,6 +1452,7 @@ impl TermWindow {
                     | Alert::TabTitleChanged(_)
                     | Alert::IconTitleChanged(_)
                     | Alert::SetUserVar { .. }
+                    | Alert::OwtTranscriptEvent(_)
                     | Alert::Bell,
             }
             | MuxNotification::PaneFocused(pane_id)
@@ -1815,6 +1877,21 @@ impl TermWindow {
     fn update_title(&mut self) {
         self.schedule_status_update();
         self.update_title_impl();
+    }
+
+    pub(crate) fn apply_owt_scope_tab_title(&mut self, title: &str) {
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+
+        let mux = Mux::get();
+        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+            if tab.get_title() != title {
+                tab.set_title(title);
+            }
+        }
+        self.update_title();
     }
 
     fn emit_user_var_event(&mut self, pane_id: PaneId, name: String, value: String) {
@@ -2259,6 +2336,37 @@ impl TermWindow {
 
     fn show_tab_navigator(&mut self) {
         self.show_launcher_impl("Tab Navigator", LauncherFlags::TABS);
+    }
+
+    fn show_owt_lcars_surface_menu(&mut self, target_interface_id: Option<String>) {
+        let anchor = self
+            .current_mouse_event
+            .as_ref()
+            .map(|event| (event.coords.x as f32, event.coords.y as f32))
+            .unwrap_or_else(|| {
+                let border = self.get_os_border();
+                let rail = self.owt_lcars_window_chrome_left_reserved_pixels();
+                let tab = self.tab_bar_pixel_height().unwrap_or(0.0);
+                (
+                    border.left.get() as f32 + (rail * 0.5).max(42.0),
+                    border.top.get() as f32 + (tab * 0.5).max(22.0),
+                )
+            });
+        self.open_owt_lcars_surface_menu(target_interface_id, anchor.0, anchor.1);
+    }
+
+    fn show_owt_dataview_overlay(&mut self, pane_id: PaneId, document: LcarsDataViewDocument) {
+        let mux = Mux::get();
+        let pane = match mux.get_pane(pane_id) {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        let (overlay, future) = start_overlay_pane(self, &pane, move |_pane_id, term| {
+            owt_dataview_overlay(term, document)
+        });
+        self.assign_overlay_for_pane(pane_id, overlay);
+        promise::spawn::spawn(future).detach();
     }
 
     fn show_launcher(&mut self) {

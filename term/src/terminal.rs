@@ -56,6 +56,8 @@ pub enum Alert {
         name: String,
         value: String,
     },
+    /// An OWT-private semantic transcript event was emitted by the PTY stream.
+    OwtTranscriptEvent(OwtTranscriptEvent),
     /// When something bumps the seqno in the terminal model and
     /// the terminal is not focused
     OutputSinceFocusLost,

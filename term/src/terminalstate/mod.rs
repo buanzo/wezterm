@@ -361,6 +361,7 @@ pub struct TerminalState {
     sixel_scrolls_right: bool,
 
     user_vars: HashMap<String, String>,
+    owt_transcript_events: Vec<OwtTranscriptEvent>,
 
     kitty_img: KittyImageState,
     seqno: SequenceNo,
@@ -570,6 +571,7 @@ impl TerminalState {
             writer,
             image_cache: lru::LruCache::new(16),
             user_vars: HashMap::new(),
+            owt_transcript_events: Vec::new(),
             kitty_img: Default::default(),
             seqno,
             unicode_version,
@@ -958,6 +960,10 @@ impl TerminalState {
 
     pub fn user_vars(&self) -> &HashMap<String, String> {
         &self.user_vars
+    }
+
+    pub fn owt_transcript_events(&self) -> &[OwtTranscriptEvent] {
+        &self.owt_transcript_events
     }
 
     fn clear_semantic_attribute_due_to_movement(&mut self) {

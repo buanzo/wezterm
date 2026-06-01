@@ -32,7 +32,8 @@ use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
     Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent,
-    SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
+    OwtTranscriptEvent, SemanticZone, StableRowIndex, Terminal, TerminalConfiguration,
+    TerminalSize,
 };
 
 const PROC_INFO_CACHE_TTL: Duration = Duration::from_millis(300);
@@ -217,6 +218,10 @@ impl Pane for LocalPane {
 
     fn copy_user_vars(&self) -> HashMap<String, String> {
         self.terminal.lock().user_vars().clone()
+    }
+
+    fn copy_owt_transcript_events(&self) -> Vec<OwtTranscriptEvent> {
+        self.terminal.lock().owt_transcript_events().to_vec()
     }
 
     fn exit_behavior(&self) -> Option<ExitBehavior> {

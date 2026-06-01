@@ -447,6 +447,10 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub use_fancy_tab_bar: bool,
 
+    /// OWT-native LCARS window chrome for the custom title/tab bar path.
+    #[dynamic(default)]
+    pub owt_lcars_window_chrome: bool,
+
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 

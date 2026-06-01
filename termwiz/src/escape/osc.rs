@@ -46,8 +46,92 @@ pub enum OperatingSystemCommand {
     CurrentWorkingDirectory(String),
     ResetColors(Vec<u8>),
     RxvtExtension(Vec<String>),
+    OwtSemantic(OwtSemanticEvent),
 
     Unspecified(Vec<Vec<u8>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwtSemanticEvent {
+    pub event: String,
+    pub payload_json: String,
+}
+
+impl OwtSemanticEvent {
+    const MAX_PAYLOAD_BYTES: usize = 4096;
+
+    fn parse(osc: &[&[u8]]) -> Result<Self> {
+        ensure!(
+            osc.len() == 3,
+            "OWT semantic OSC requires event and base64url payload"
+        );
+
+        let event = String::from_utf8(osc[1].to_vec())?;
+        ensure!(is_valid_owt_event_name(&event), "invalid OWT event name");
+
+        let encoded = str::from_utf8(osc[2])?;
+        ensure!(
+            encoded.len() <= Self::MAX_PAYLOAD_BYTES * 2,
+            "OWT semantic OSC payload is too large"
+        );
+        ensure!(
+            encoded
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "OWT semantic OSC payload must be unpadded base64url"
+        );
+
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded)?;
+        ensure!(
+            bytes.len() <= Self::MAX_PAYLOAD_BYTES,
+            "OWT semantic OSC decoded payload is too large"
+        );
+
+        let payload_json = String::from_utf8(bytes)?;
+        let trimmed = payload_json.trim();
+        ensure!(
+            trimmed.starts_with('{') && trimmed.ends_with('}'),
+            "OWT semantic OSC payload must be a JSON object"
+        );
+        ensure!(
+            !looks_credential_sensitive(trimmed),
+            "OWT semantic OSC payload contains credential-sensitive keys"
+        );
+
+        Ok(Self {
+            event,
+            payload_json,
+        })
+    }
+}
+
+fn is_valid_owt_event_name(event: &str) -> bool {
+    event
+        .strip_prefix("owt.")
+        .map(|suffix| {
+            !suffix.is_empty()
+                && suffix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        })
+        .unwrap_or(false)
+}
+
+fn looks_credential_sensitive(payload: &str) -> bool {
+    let lower = payload.to_ascii_lowercase();
+    [
+        "\"api_key\"",
+        "\"apikey\"",
+        "\"access_token\"",
+        "\"refresh_token\"",
+        "\"bearer\"",
+        "\"credential\"",
+        "\"password\"",
+        "\"secret\"",
+        "\"token\"",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
@@ -323,6 +407,7 @@ impl OperatingSystemCommand {
                 }
                 Ok(OperatingSystemCommand::RxvtExtension(vec))
             }
+            OwtSemantic => OwtSemanticEvent::parse(osc).map(OperatingSystemCommand::OwtSemantic),
             FinalTermSemanticPrompt => self::FinalTermSemanticPrompt::parse(osc)
                 .map(OperatingSystemCommand::FinalTermSemanticPrompt),
             ChangeColorNumber => Self::parse_change_color_number(osc),
@@ -436,6 +521,7 @@ osc_entries!(
     ResetTektronixCursorColor = "118",
     ResetHighlightForegroundColor = "119",
     RxvtProprietary = "777",
+    OwtSemantic = "1701",
     FinalTermSemanticPrompt = "133",
     ITermProprietary = "1337",
     /// Here the "Sun" suffix comes from the table in
@@ -497,6 +583,7 @@ impl Display for OperatingSystemCommand {
             SetHyperlink(Some(link)) => link.fmt(f)?,
             SetHyperlink(None) => write!(f, "8;;")?,
             RxvtExtension(params) => write!(f, "777;{}", params.join(";"))?,
+            OwtSemantic(event) => event.fmt(f)?,
             Unspecified(v) => {
                 for (idx, item) in v.iter().enumerate() {
                     if idx > 0 {
@@ -537,6 +624,14 @@ impl Display for OperatingSystemCommand {
         // Use the longer form ST as neovim doesn't like the BEL version
         write!(f, "\x1b\\")?;
         Ok(())
+    }
+}
+
+impl Display for OwtSemanticEvent {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.payload_json.as_bytes());
+        write!(f, "1701;{};{}", self.event, encoded)
     }
 }
 
@@ -1329,6 +1424,77 @@ mod test {
             parse(&["112"], "\x1b]112\x1b\\"),
             OperatingSystemCommand::ResetDynamicColor(DynamicColorNumber::TextCursorColor)
         );
+    }
+
+    #[test]
+    fn owt_semantic_event() {
+        let payload = r#"{"version":1,"id":"plan","kind":"section"}"#;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        assert_eq!(
+            parse(
+                &["1701", "owt.section", &encoded],
+                &format!("\x1b]1701;owt.section;{}\x1b\\", encoded)
+            ),
+            OperatingSystemCommand::OwtSemantic(OwtSemanticEvent {
+                event: "owt.section".to_string(),
+                payload_json: payload.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn owt_semantic_dataview_event() {
+        let payload =
+            r#"{"version":1,"id":"fleet.demo","kind":"owt.lcars.dataview","chunks":1,"bytes":42}"#;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        assert_eq!(
+            parse(
+                &["1701", "owt.dataview.begin", &encoded],
+                &format!("\x1b]1701;owt.dataview.begin;{}\x1b\\", encoded)
+            ),
+            OperatingSystemCommand::OwtSemantic(OwtSemanticEvent {
+                event: "owt.dataview.begin".to_string(),
+                payload_json: payload.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn owt_semantic_event_rejects_bad_payloads() {
+        let secret_payload = r#"{"version":1,"token":"abc"}"#;
+        let secret_encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_payload);
+        assert!(matches!(
+            OperatingSystemCommand::parse(&[
+                b"1701".as_slice(),
+                b"owt.section".as_slice(),
+                secret_encoded.as_bytes(),
+            ]),
+            OperatingSystemCommand::Unspecified(_)
+        ));
+
+        assert!(matches!(
+            OperatingSystemCommand::parse(&[
+                b"1701".as_slice(),
+                b"owt.section".as_slice(),
+                b"not+base64url".as_slice(),
+            ]),
+            OperatingSystemCommand::Unspecified(_)
+        ));
+    }
+
+    #[test]
+    fn owt_semantic_event_rejects_old_selector() {
+        let payload = r#"{"version":1,"id":"plan","kind":"section"}"#;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        assert!(matches!(
+            OperatingSystemCommand::parse(&[
+                b"9001".as_slice(),
+                b"owt.section".as_slice(),
+                encoded.as_bytes(),
+            ]),
+            OperatingSystemCommand::Unspecified(_)
+        ));
     }
 
     #[test]
