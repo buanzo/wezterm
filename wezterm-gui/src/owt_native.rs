@@ -30,6 +30,7 @@ use crate::SubCommand;
 const MAX_REQUEST_BYTES: usize = 256 * 1024;
 const INTERFACE_PACK_KIND: &str = "owt.interface_pack";
 const INTERFACE_PACK_SCHEMA_VERSION: u16 = 1;
+const CLEAR_LAYOUT_PROPERTY_VALUE: &str = "__owt_clear_layout_property__";
 
 static OWT_RUNTIME: Lazy<Arc<Mutex<RuntimeState>>> =
     Lazy::new(|| Arc::new(Mutex::new(RuntimeState::default())));
@@ -3309,7 +3310,11 @@ fn interface_document_with_layout_overrides(
         return (document, None);
     };
     for (key, value) in &layout_override.properties {
-        node.properties.insert(key.clone(), value.clone());
+        if layout_override_clear_requested(value) {
+            node.properties.remove(key);
+        } else {
+            node.properties.insert(key.clone(), value.clone());
+        }
     }
     (document, Some(layout_override))
 }
@@ -3411,7 +3416,19 @@ fn persistent_layout_position_key(key: &str) -> bool {
             | "float_y"
             | "widget_y"
             | "surface_y"
+            | "floating_width"
+            | "float_width"
+            | "widget_width"
+            | "surface_width"
+            | "floating_height"
+            | "float_height"
+            | "widget_height"
+            | "surface_height"
     )
+}
+
+fn layout_override_clear_requested(value: &str) -> bool {
+    value.trim() == CLEAR_LAYOUT_PROPERTY_VALUE
 }
 
 fn persistent_layout_override_key(key: &str) -> bool {
@@ -4710,7 +4727,7 @@ mod tests {
         renderer_native_execution_candidate_from_state, request_runtime_refresh,
         required_http_request_len, sanitize_interface_id, save_interface_layout_override,
         saved_interface_summary_from_value, validation_warnings_payload_for_interface,
-        windows_drive_path_from_wsl_mount, ListActionRequestsRequest,
+        windows_drive_path_from_wsl_mount, ListActionRequestsRequest, CLEAR_LAYOUT_PROPERTY_VALUE,
     };
     use owt_control::{
         ActionKind, ActionProvenance, InterfaceDocument, InterfaceLifecycleState,
@@ -5030,6 +5047,71 @@ mod tests {
                 .map(String::as_str),
             Some("bottom-right")
         );
+
+        let (_store_id, path) = layout_override_file_path(&interface_id);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn persisted_layout_override_clears_floating_keys() {
+        let interface_id = format!(
+            "demo.layout.override.clear.{}.{}",
+            std::process::id(),
+            current_unix_seconds()
+        );
+        let mut document = InterfaceDocument::new(
+            interface_id.clone(),
+            "DEMO LAYOUT",
+            Scope::new(ScopeKind::Project, "/tmp/demo-layout"),
+        );
+        let mut root = UiNode::new("panel.root", UiNodeKind::Panel);
+        root.properties
+            .insert("layout".to_string(), "overlay".to_string());
+        root.properties
+            .insert("floating_x".to_string(), "640".to_string());
+        root.properties
+            .insert("floating_y".to_string(), "360".to_string());
+        document.nodes.push(root);
+
+        let properties = BTreeMap::from([
+            ("layout".to_string(), "left_rail".to_string()),
+            ("reservation".to_string(), "reserved".to_string()),
+            (
+                "floating_x".to_string(),
+                CLEAR_LAYOUT_PROPERTY_VALUE.to_string(),
+            ),
+            (
+                "floating_y".to_string(),
+                CLEAR_LAYOUT_PROPERTY_VALUE.to_string(),
+            ),
+        ]);
+        save_interface_layout_override(
+            &interface_id,
+            Some(&document.scope),
+            "panel.root",
+            properties,
+        )
+        .unwrap();
+
+        let (prepared, layout_override) = interface_document_with_layout_overrides(document);
+
+        assert!(layout_override.is_some());
+        assert_eq!(
+            prepared.nodes[0]
+                .properties
+                .get("layout")
+                .map(String::as_str),
+            Some("left_rail")
+        );
+        assert_eq!(
+            prepared.nodes[0]
+                .properties
+                .get("reservation")
+                .map(String::as_str),
+            Some("reserved")
+        );
+        assert!(!prepared.nodes[0].properties.contains_key("floating_x"));
+        assert!(!prepared.nodes[0].properties.contains_key("floating_y"));
 
         let (_store_id, path) = layout_override_file_path(&interface_id);
         let _ = std::fs::remove_file(path);

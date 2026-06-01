@@ -63,6 +63,28 @@ const LCARS_PRIMITIVE_LEGEND_COUNT: usize = 20;
 const LCARS_SURFACE_MENU_MAX_SLOTS: usize = 8;
 const LCARS_NATIVE_SURFACE_MIN_WIDTH: f32 = 320.0;
 const LCARS_NATIVE_SURFACE_MIN_HEIGHT: f32 = 180.0;
+const LCARS_CLEAR_LAYOUT_PROPERTY: &str = "__owt_clear_layout_property__";
+const LCARS_FLOATING_LAYOUT_KEYS: &[&str] = &[
+    "floating_anchor",
+    "float_anchor",
+    "widget_anchor",
+    "floating_x",
+    "float_x",
+    "widget_x",
+    "surface_x",
+    "floating_y",
+    "float_y",
+    "widget_y",
+    "surface_y",
+    "floating_width",
+    "float_width",
+    "widget_width",
+    "surface_width",
+    "floating_height",
+    "float_height",
+    "widget_height",
+    "surface_height",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LcarsPanelLayout {
@@ -247,6 +269,10 @@ fn lcars_compact_button_reserved_pixels(button_height: f32) -> f32 {
     LCARS_PANEL_MARGIN + 8.0 + button_height + LCARS_PANEL_GAP
 }
 
+fn lcars_compact_side_button_reserved_pixels(button_width: f32) -> f32 {
+    LCARS_PANEL_MARGIN + button_width + LCARS_PANEL_GAP
+}
+
 fn lcars_action_strip_button_height_from_cell(cell_height: f32) -> f32 {
     (cell_height * 1.55).clamp(24.0, 34.0)
 }
@@ -368,6 +394,11 @@ enum LcarsPaletteProfile {
     Classic,
     BrightClassic,
     ScienceStation,
+    WarmClassic,
+    OpsBlue,
+    CyanConsole,
+    RedAlert,
+    GreenStation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -448,6 +479,61 @@ impl LcarsPalette {
                 LcarsByteColor::rgb(118, 174, 188),
                 LcarsByteColor::rgb(174, 72, 78),
                 0.68,
+                0.72,
+            ),
+            LcarsPaletteProfile::WarmClassic => Self::from_bytes(
+                LcarsByteColor::rgb(255, 168, 64),
+                LcarsByteColor::rgb(255, 219, 112),
+                LcarsByteColor::rgb(255, 139, 84),
+                LcarsByteColor::rgb(198, 126, 255),
+                LcarsByteColor::rgb(118, 142, 255),
+                LcarsByteColor::rgb(130, 218, 255),
+                LcarsByteColor::rgb(238, 62, 52),
+                0.76,
+                0.80,
+            ),
+            LcarsPaletteProfile::OpsBlue => Self::from_bytes(
+                LcarsByteColor::rgb(146, 153, 172),
+                LcarsByteColor::rgb(214, 224, 238),
+                LcarsByteColor::rgb(166, 176, 196),
+                LcarsByteColor::rgb(112, 126, 158),
+                LcarsByteColor::rgb(116, 152, 224),
+                LcarsByteColor::rgb(164, 222, 244),
+                LcarsByteColor::rgb(218, 72, 72),
+                0.74,
+                0.76,
+            ),
+            LcarsPaletteProfile::CyanConsole => Self::from_bytes(
+                LcarsByteColor::rgb(70, 226, 226),
+                LcarsByteColor::rgb(224, 204, 160),
+                LcarsByteColor::rgb(44, 190, 206),
+                LcarsByteColor::rgb(132, 74, 110),
+                LcarsByteColor::rgb(82, 164, 230),
+                LcarsByteColor::rgb(138, 248, 255),
+                LcarsByteColor::rgb(228, 70, 70),
+                0.78,
+                0.72,
+            ),
+            LcarsPaletteProfile::RedAlert => Self::from_bytes(
+                LcarsByteColor::rgb(255, 69, 24),
+                LcarsByteColor::rgb(255, 184, 80),
+                LcarsByteColor::rgb(236, 50, 42),
+                LcarsByteColor::rgb(138, 88, 122),
+                LcarsByteColor::rgb(126, 132, 158),
+                LcarsByteColor::rgb(255, 204, 138),
+                LcarsByteColor::rgb(255, 42, 28),
+                0.62,
+                0.66,
+            ),
+            LcarsPaletteProfile::GreenStation => Self::from_bytes(
+                LcarsByteColor::rgb(66, 194, 92),
+                LcarsByteColor::rgb(194, 230, 132),
+                LcarsByteColor::rgb(104, 214, 122),
+                LcarsByteColor::rgb(48, 130, 74),
+                LcarsByteColor::rgb(92, 172, 156),
+                LcarsByteColor::rgb(160, 242, 192),
+                LcarsByteColor::rgb(224, 72, 72),
+                0.72,
                 0.72,
             ),
         }
@@ -776,12 +862,29 @@ fn lcars_surface_menu_properties(
         ],
     };
 
-    Some(
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect(),
-    )
+    let mut properties = pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect::<BTreeMap<_, _>>();
+    if matches!(
+        action,
+        LcarsSurfaceMenuAction::DockTopLeft
+            | LcarsSurfaceMenuAction::DockLeftRail
+            | LcarsSurfaceMenuAction::DockRightRail
+            | LcarsSurfaceMenuAction::DockBottomStrip
+            | LcarsSurfaceMenuAction::DockBottomRight
+    ) {
+        properties.insert("allow_terminal_overlay".to_string(), "false".to_string());
+        lcars_clear_floating_layout_properties(&mut properties);
+    }
+
+    Some(properties)
+}
+
+fn lcars_clear_floating_layout_properties(properties: &mut BTreeMap<String, String>) {
+    for key in LCARS_FLOATING_LAYOUT_KEYS {
+        properties.insert((*key).to_string(), LCARS_CLEAR_LAYOUT_PROPERTY.to_string());
+    }
 }
 
 pub(crate) fn owt_lcars_drag_drop_layout_properties(
@@ -2168,7 +2271,11 @@ impl crate::TermWindow {
             side @ (LcarsPanelLayout::Left | LcarsPanelLayout::Right) => {
                 let available_width =
                     self.dimensions.pixel_width as f32 - (LCARS_PANEL_MARGIN * 2.0);
-                let panel_width = if lcars_action_strip_mode(document) {
+                let panel_width = if lcars_corner_button_mode(document) {
+                    Some(lcars_compact_side_button_reserved_pixels(
+                        self.owt_lcars_corner_button_width_for(document),
+                    ))
+                } else if lcars_action_strip_mode(document) {
                     self.owt_lcars_action_strip_side_width_for(document, available_width)
                 } else {
                     self.owt_lcars_side_panel_width_for(
@@ -2179,7 +2286,11 @@ impl crate::TermWindow {
                 let Some(panel_width) = panel_width else {
                     return LcarsReservedPixels::default();
                 };
-                let reserved = LCARS_PANEL_MARGIN + panel_width + LCARS_PANEL_GAP;
+                let reserved = if lcars_corner_button_mode(document) {
+                    panel_width
+                } else {
+                    LCARS_PANEL_MARGIN + panel_width + LCARS_PANEL_GAP
+                };
                 match side {
                     LcarsPanelLayout::Left => LcarsReservedPixels {
                         left: reserved,
@@ -2234,6 +2345,36 @@ impl crate::TermWindow {
         )
         .unwrap_or((cell_height * 1.9).clamp(30.0, 42.0))
         .clamp(28.0, 54.0)
+    }
+
+    fn owt_lcars_corner_button_width_for(&self, document: &InterfaceDocument) -> f32 {
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let lines = panel_lines(document, 32);
+        let text_chars = lines
+            .items
+            .iter()
+            .find(|line| line.action_id.is_some())
+            .map(|line| line.text.chars().count())
+            .unwrap_or_else(|| document.title.chars().count());
+        let requested_width = lcars_float_property(
+            document,
+            &[
+                "floating_width",
+                "float_width",
+                "widget_width",
+                "surface_width",
+            ],
+        );
+        let placement = lcars_surface_placement(document);
+        let large_overlay_allowed = placement.layout == LcarsPanelLayout::Overlay
+            && lcars_corner_button_large_overlay_allowed(document);
+        lcars_corner_button_width_from_metrics(
+            cell_width,
+            text_chars,
+            requested_width,
+            self.dimensions.pixel_width as f32,
+            large_overlay_allowed,
+        )
     }
 
     fn owt_lcars_action_strip_height_for(&self, document: &InterfaceDocument) -> f32 {
@@ -2981,23 +3122,9 @@ impl crate::TermWindow {
         };
         let usable_top = border.top.get() as f32 + tab_bar_height + margin;
         let button_height = self.owt_lcars_corner_button_height_for(document);
-        let requested_width = lcars_float_property(
-            document,
-            &[
-                "floating_width",
-                "float_width",
-                "widget_width",
-                "surface_width",
-            ],
-        );
-        let large_overlay_allowed = lcars_corner_button_large_overlay_allowed(document);
-        let button_width = lcars_corner_button_width_from_metrics(
-            cell_width,
-            line.text.chars().count(),
-            requested_width,
-            viewport_width,
-            large_overlay_allowed,
-        );
+        let large_overlay_allowed = placement.layout == LcarsPanelLayout::Overlay
+            && lcars_corner_button_large_overlay_allowed(document);
+        let button_width = self.owt_lcars_corner_button_width_for(document);
         let default_left = match placement.layout {
             LcarsPanelLayout::Left => margin,
             LcarsPanelLayout::Right => (viewport_width - button_width - margin).max(margin),
@@ -8375,6 +8502,17 @@ fn lcars_palette_profile(document: &InterfaceDocument) -> LcarsPaletteProfile {
         "bright" | "bright_classic" | "classic_bright" | "classic_v24" | "lcars_v24" => {
             LcarsPaletteProfile::BrightClassic
         }
+        "warm" | "warm_classic" | "classic_warm" | "amber" | "gold" => {
+            LcarsPaletteProfile::WarmClassic
+        }
+        "ops" | "ops_blue" | "blue_gray" | "blue_grey" | "gray" | "grey" | "muted_blue" => {
+            LcarsPaletteProfile::OpsBlue
+        }
+        "cyan" | "cyan_console" | "home_assistant" | "ha_lcars" | "ha" => {
+            LcarsPaletteProfile::CyanConsole
+        }
+        "red" | "red_alert" | "alert" => LcarsPaletteProfile::RedAlert,
+        "green" | "green_station" | "station_green" => LcarsPaletteProfile::GreenStation,
         "classic" | "default" => LcarsPaletteProfile::Classic,
         _ => LcarsPaletteProfile::Classic,
     }
@@ -8385,6 +8523,11 @@ fn lcars_palette_profile_name(profile: LcarsPaletteProfile) -> &'static str {
         LcarsPaletteProfile::Classic => "classic",
         LcarsPaletteProfile::BrightClassic => "bright_classic",
         LcarsPaletteProfile::ScienceStation => "science_station",
+        LcarsPaletteProfile::WarmClassic => "warm_classic",
+        LcarsPaletteProfile::OpsBlue => "ops_blue",
+        LcarsPaletteProfile::CyanConsole => "cyan_console",
+        LcarsPaletteProfile::RedAlert => "red_alert",
+        LcarsPaletteProfile::GreenStation => "green_station",
     }
 }
 
@@ -16296,7 +16439,8 @@ mod tests {
         LcarsStructuralMode, LcarsSurfaceMenuAction, LcarsSurfaceOrientation, LcarsSurfaceOrigin,
         LcarsSurfacePlacement, LcarsSurfaceReservation, LcarsTableGroupSummary, PanelLine,
         PanelLineKind, TheLcarsCockpitDensity, TheLcarsDemoMetadata, LCARS_BOTTOM_PANEL_MIN_HEIGHT,
-        LCARS_PANEL_GAP, LCARS_PANEL_MARGIN, LCARS_SIDE_PANEL_MIN_WIDTH,
+        LCARS_CLEAR_LAYOUT_PROPERTY, LCARS_PANEL_GAP, LCARS_PANEL_MARGIN,
+        LCARS_SIDE_PANEL_MIN_WIDTH,
     };
     use crate::termwindow::{OwtLcarsSurfaceMenuMode, OwtLcarsSurfaceMenuState};
     use owt_control::{
@@ -18076,6 +18220,19 @@ mod tests {
             lcars_palette_profile(&document),
             LcarsPaletteProfile::Classic
         );
+
+        for (alias, profile) in [
+            ("warm-classic", LcarsPaletteProfile::WarmClassic),
+            ("ops_blue", LcarsPaletteProfile::OpsBlue),
+            ("ha-lcars", LcarsPaletteProfile::CyanConsole),
+            ("red alert", LcarsPaletteProfile::RedAlert),
+            ("green_station", LcarsPaletteProfile::GreenStation),
+        ] {
+            document.nodes[0]
+                .properties
+                .insert("palette_profile".to_string(), alias.to_string());
+            assert_eq!(lcars_palette_profile(&document), profile);
+        }
     }
 
     #[test]
@@ -18333,6 +18490,18 @@ mod tests {
             assert_eq!(properties.get("visible").map(String::as_str), Some("true"));
             assert_eq!(properties.get("hidden").map(String::as_str), Some("false"));
             assert_eq!(properties.get("display").map(String::as_str), Some("block"));
+            assert_eq!(
+                properties.get("allow_terminal_overlay").map(String::as_str),
+                Some("false")
+            );
+            assert_eq!(
+                properties.get("floating_x").map(String::as_str),
+                Some(LCARS_CLEAR_LAYOUT_PROPERTY)
+            );
+            assert_eq!(
+                properties.get("floating_width").map(String::as_str),
+                Some(LCARS_CLEAR_LAYOUT_PROPERTY)
+            );
         }
     }
 
@@ -18455,6 +18624,18 @@ mod tests {
             Some("vertical")
         );
         assert_eq!(left.get("display").map(String::as_str), Some("block"));
+        assert_eq!(
+            left.get("allow_terminal_overlay").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            left.get("floating_x").map(String::as_str),
+            Some(LCARS_CLEAR_LAYOUT_PROPERTY)
+        );
+        assert_eq!(
+            left.get("floating_y").map(String::as_str),
+            Some(LCARS_CLEAR_LAYOUT_PROPERTY)
+        );
 
         let right = owt_lcars_drag_drop_layout_properties(1192.0, 400.0, 1200.0, 800.0);
         assert_eq!(right.get("layout").map(String::as_str), Some("right_rail"));
@@ -18510,6 +18691,10 @@ mod tests {
         assert_eq!(overlay.get("reserve").map(String::as_str), Some("overlay"));
         assert_eq!(overlay.get("placement").map(String::as_str), Some("free"));
         assert_eq!(overlay.get("display").map(String::as_str), Some("block"));
+        assert_eq!(
+            overlay.get("allow_terminal_overlay").map(String::as_str),
+            Some("true")
+        );
         assert_eq!(
             overlay.get("floating_anchor").map(String::as_str),
             Some("center")
@@ -18600,6 +18785,39 @@ mod tests {
         assert_eq!(projection.floating_y.as_deref(), Some("360"));
         assert_eq!(projection.floating_width.as_deref(), Some("520"));
         assert_eq!(projection.floating_height.as_deref(), Some("260"));
+    }
+
+    #[test]
+    fn corner_button_left_rail_projection_ignores_stale_floating_geometry() {
+        let mut document =
+            placement_test_document(Some("left"), Some("reserved"), Some("vertical"));
+        let root = &mut document.nodes[0];
+        root.properties
+            .insert("profile".to_string(), "corner_button".to_string());
+        root.properties
+            .insert("floating_anchor".to_string(), "center".to_string());
+        root.properties
+            .insert("floating_x".to_string(), "640".to_string());
+        root.properties
+            .insert("floating_y".to_string(), "360".to_string());
+        root.properties
+            .insert("floating_width".to_string(), "520".to_string());
+        root.properties
+            .insert("floating_height".to_string(), "260".to_string());
+
+        let projection = describe_lcars_render_projection(&document);
+
+        assert_eq!(projection.renderer_path, "corner_button");
+        assert_eq!(projection.layout, "left_rail");
+        assert_eq!(projection.reservation, "reserved");
+        assert_eq!(projection.orientation, "vertical");
+        assert_eq!(projection.presentation_tier, "compact_action");
+        assert!(projection.reserves_terminal_space);
+        assert!(projection.reserved_terminal);
+        assert_eq!(projection.floating_x, None);
+        assert_eq!(projection.floating_y, None);
+        assert_eq!(projection.floating_width, None);
+        assert_eq!(projection.floating_height, None);
     }
 
     #[test]

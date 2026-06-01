@@ -9,6 +9,7 @@ use crate::interface::{
 
 pub type Result<T> = std::result::Result<T, ControlError>;
 const NATIVE_KEYBOARD_ACTION_LIMIT: usize = 9;
+const CLEAR_LAYOUT_PROPERTY_VALUE: &str = "__owt_clear_layout_property__";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ControlError {
@@ -1361,7 +1362,11 @@ impl RuntimeState {
 
         let prior_properties = node.properties.clone();
         for (key, value) in properties {
-            node.properties.insert(key, value);
+            if layout_property_clear_requested(&value) {
+                node.properties.remove(&key);
+            } else {
+                node.properties.insert(key, value);
+            }
         }
         let applied_properties = node.properties.clone();
 
@@ -1426,7 +1431,11 @@ impl RuntimeState {
         let prior_properties = node.properties.clone();
         let mut preview_properties = prior_properties.clone();
         for (key, value) in &requested_properties {
-            preview_properties.insert(key.clone(), value.clone());
+            if layout_property_clear_requested(value) {
+                preview_properties.remove(key);
+            } else {
+                preview_properties.insert(key.clone(), value.clone());
+            }
         }
         let unsupported_hints = layout_preview_unsupported_hints(&preview_properties);
         let conflict_hints =
@@ -2470,6 +2479,10 @@ fn normalized_layout_properties(properties: BTreeMap<String, String>) -> BTreeMa
             }
         })
         .collect()
+}
+
+fn layout_property_clear_requested(value: &str) -> bool {
+    value.trim() == CLEAR_LAYOUT_PROPERTY_VALUE
 }
 
 fn recent_matching_items<T, F>(items: &[T], limit: usize, mut matches: F) -> Vec<T>
@@ -5597,7 +5610,7 @@ mod tests {
     use super::{
         interface_validation_warnings, validate_interface, ActionProvenance, ControlError,
         InterfaceEditOperation, InterfaceLifecyclePatch, RequestApprovalState, RuntimeEventKind,
-        RuntimeState, TableCellFocusMovement, TableFocusMovement,
+        RuntimeState, TableCellFocusMovement, TableFocusMovement, CLEAR_LAYOUT_PROPERTY_VALUE,
     };
 
     fn sample_interface() -> InterfaceDocument {
@@ -7188,6 +7201,58 @@ mod tests {
         assert_eq!(root.properties["dock"], "right");
         assert_eq!(root.properties["reservation"], "reserved");
         assert_eq!(root.children[0].id, "button.open");
+    }
+
+    #[test]
+    fn patch_interface_layout_clears_stale_floating_properties() {
+        let mut document = sample_interface();
+        document.nodes[0]
+            .properties
+            .insert("layout".to_string(), "overlay".to_string());
+        document.nodes[0]
+            .properties
+            .insert("floating_x".to_string(), "640".to_string());
+        document.nodes[0]
+            .properties
+            .insert("floating_y".to_string(), "360".to_string());
+        document.nodes[0]
+            .properties
+            .insert("floating_width".to_string(), "520".to_string());
+
+        let mut state = RuntimeState::default();
+        state.apply_interface(document).unwrap();
+
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("layout".to_string(), "left_rail".to_string());
+        properties.insert("reservation".to_string(), "reserved".to_string());
+        properties.insert(
+            "floating_x".to_string(),
+            CLEAR_LAYOUT_PROPERTY_VALUE.to_string(),
+        );
+        properties.insert(
+            "floating_y".to_string(),
+            CLEAR_LAYOUT_PROPERTY_VALUE.to_string(),
+        );
+        properties.insert(
+            "floating_width".to_string(),
+            CLEAR_LAYOUT_PROPERTY_VALUE.to_string(),
+        );
+
+        let patched = state
+            .patch_interface_layout(None, None, None, properties)
+            .unwrap();
+
+        let root = &state.interfaces["genetica.local"].nodes[0];
+        assert_eq!(root.properties["layout"], "left_rail");
+        assert_eq!(root.properties["reservation"], "reserved");
+        assert!(!root.properties.contains_key("floating_x"));
+        assert!(!root.properties.contains_key("floating_y"));
+        assert!(!root.properties.contains_key("floating_width"));
+        assert_eq!(
+            patched.applied_properties.get("layout").map(String::as_str),
+            Some("left_rail")
+        );
+        assert!(!patched.applied_properties.contains_key("floating_x"));
     }
 
     #[test]

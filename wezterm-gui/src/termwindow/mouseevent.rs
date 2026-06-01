@@ -503,17 +503,23 @@ impl super::TermWindow {
         context: &dyn WindowOps,
     ) {
         context.set_cursor(Some(MouseCursor::Hand));
-        self.owt_lcars_drag_preview = None;
+        let drag_preview = self.owt_lcars_drag_preview.take();
         if !owt_lcars_drag_exceeded_threshold(&start_event, &event) {
             self.play_owt_lcars_private_click_sound();
             self.show_owt_lcars_surface_menu(Some(interface_id));
             return;
         }
 
+        let (drop_x, drop_y) = owt_lcars_drag_drop_coordinates(
+            &interface_id,
+            drag_preview.as_ref(),
+            event.coords.x,
+            event.coords.y,
+        );
         let properties =
             crate::termwindow::render::owt_lcars::owt_lcars_drag_drop_layout_properties(
-                event.coords.x.max(0) as f32,
-                event.coords.y.max(0) as f32,
+                drop_x,
+                drop_y,
                 self.dimensions.pixel_width as f32,
                 self.dimensions.pixel_height as f32,
             );
@@ -530,16 +536,22 @@ impl super::TermWindow {
         context: &dyn WindowOps,
     ) {
         context.set_cursor(Some(MouseCursor::Hand));
-        self.owt_lcars_drag_preview = None;
+        let drag_preview = self.owt_lcars_drag_preview.take();
         if !owt_lcars_drag_exceeded_threshold(&start_event, &event) {
             self.dispatch_owt_lcars_action(&interface_id, &action_id, context);
             return;
         }
 
+        let (drop_x, drop_y) = owt_lcars_drag_drop_coordinates(
+            &interface_id,
+            drag_preview.as_ref(),
+            event.coords.x,
+            event.coords.y,
+        );
         let properties =
             crate::termwindow::render::owt_lcars::owt_lcars_drag_drop_layout_properties(
-                event.coords.x.max(0) as f32,
-                event.coords.y.max(0) as f32,
+                drop_x,
+                drop_y,
                 self.dimensions.pixel_width as f32,
                 self.dimensions.pixel_height as f32,
             );
@@ -1408,10 +1420,22 @@ fn owt_lcars_drag_exceeded_threshold(start_event: &MouseEvent, event: &MouseEven
     dx.abs().max(dy.abs()) >= 12
 }
 
+fn owt_lcars_drag_drop_coordinates(
+    interface_id: &str,
+    preview: Option<&OwtLcarsDragPreviewState>,
+    event_x: isize,
+    event_y: isize,
+) -> (f32, f32) {
+    if let Some(preview) = preview.filter(|preview| preview.interface_id == interface_id) {
+        return (preview.x, preview.y);
+    }
+    (event_x.max(0) as f32, event_y.max(0) as f32)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ui_item_hit_priority;
-    use crate::termwindow::UIItemType;
+    use super::{owt_lcars_drag_drop_coordinates, ui_item_hit_priority};
+    use crate::termwindow::{OwtLcarsDragPreviewState, UIItemType};
 
     #[test]
     fn lcars_specific_hitboxes_outrank_surface_control_hitboxes() {
@@ -1438,5 +1462,23 @@ mod tests {
         assert!(ui_item_hit_priority(&action) > ui_item_hit_priority(&surface));
         assert!(ui_item_hit_priority(&permission) > ui_item_hit_priority(&action));
         assert!(ui_item_hit_priority(&resize) > ui_item_hit_priority(&table_cell));
+    }
+
+    #[test]
+    fn lcars_drop_commit_uses_matching_preview_coordinates() {
+        let preview = OwtLcarsDragPreviewState {
+            interface_id: "surface.one".to_string(),
+            x: 8.0,
+            y: 400.0,
+        };
+
+        assert_eq!(
+            owt_lcars_drag_drop_coordinates("surface.one", Some(&preview), 700, 390),
+            (8.0, 400.0)
+        );
+        assert_eq!(
+            owt_lcars_drag_drop_coordinates("surface.two", Some(&preview), 700, 390),
+            (700.0, 390.0)
+        );
     }
 }
